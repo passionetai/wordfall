@@ -120,13 +120,14 @@
 
         #input-buffer {
             position: fixed;
-            bottom: 7%;
+            bottom: 110px;
             left: 50%;
             transform: translateX(-50%);
-            font-size: 28px;
-            font-weight: 700;
+            font-family: var(--font-game);
+            font-size: 36px;
+            font-weight: 400;
             letter-spacing: 4px;
-            color: var(--accent);
+            color: var(--neon-cyan);
             text-shadow: 0 0 24px rgba(0, 240, 255, 0.6);
             pointer-events: none;
             z-index: 10;
@@ -169,11 +170,23 @@
         .panel h2 {
             font-family: var(--font-display);
             font-size: 56px; margin: 0 0 18px;
-            color: var(--neon-cyan);
-            text-shadow: 0 0 12px var(--neon-cyan), 0 0 24px var(--neon-cyan);
+            color: var(--neon-magenta);
+            text-shadow: 0 0 12px var(--neon-magenta), 0 0 24px var(--neon-magenta);
             letter-spacing: 3px;
             font-weight: 400;
         }
+        .title-logo {
+            display: none;
+            max-width: 400px;
+            width: 100%;
+            height: auto;
+            margin: 0 auto 16px;
+            filter: drop-shadow(0 0 18px rgba(0, 240, 255, 0.55))
+                    drop-shadow(0 0 36px rgba(0, 240, 255, 0.35));
+        }
+        .title-logo.go { max-width: 220px; margin-bottom: 10px; }
+        .title-logo.loaded { display: block; }
+        .title-logo.loaded + h1, .title-logo.loaded + h2 { display: none; }
         .panel p {
             color: var(--muted);
             font-size: 16px;
@@ -305,55 +318,16 @@
         <canvas id="game"></canvas>
     </div>
 
-    <div id="hud">
-        <div id="hud-left">
-            <div class="hud-block">
-                <div class="label">Score</div>
-                <div class="value" id="score">0</div>
-            </div>
-            <div class="hud-block">
-                <div class="label">Level</div>
-                <div class="value" id="level">1</div>
-            </div>
-        </div>
-        <div id="hud-center">
-            <div id="combo-text">Combo <b id="combo">0</b>x &middot; <span id="mult">1.0</span>x</div>
-            <div id="combo-bar"><div id="combo-bar-fill"></div></div>
-        </div>
-        <div id="hud-right">
-            <div class="hud-block">
-                <div class="label">WPM</div>
-                <div class="value" id="wpm">0</div>
-            </div>
-            <div class="hud-block">
-                <div class="label">Lives</div>
-                <div id="lives-icons"></div>
-            </div>
-        </div>
-    </div>
-
+    <!-- HUD now drawn on canvas (Step 2). Hidden DOM stubs kept for any legacy refs. -->
     <div id="input-buffer"></div>
-
-    <div class="powerups" id="powerups">
-        <div class="pu" data-pu="freeze" title="Freeze (F) — Slow time">
-            <div class="icon">&#10052;</div><div>FREEZE</div>
-        </div>
-        <div class="pu" data-pu="bomb" title="Bomb (B) — Clear screen">
-            <div class="icon">&#9728;</div><div>BOMB</div>
-        </div>
-        <div class="pu" data-pu="shield" title="Shield (S) — Block next miss">
-            <div class="icon">&#9650;</div><div>SHIELD</div>
-        </div>
-    </div>
 
     <div id="pause-hint">PAUSED</div>
     <div id="toast"></div>
 
-    <div class="hint">Type to shoot &middot; ESC pause &middot; F freeze &middot; B bomb &middot; S shield</div>
-
     <div class="overlay show" id="menu">
         <div class="panel">
-            <h1>WORD FALL</h1>
+            <img id="menu-logo" class="title-logo" alt="Word Fall" />
+            <h1 id="menu-title">WORD FALL</h1>
             <p>Type the falling words before they crash. Build combos, earn power-ups,
                climb the leaderboard.</p>
 
@@ -384,7 +358,8 @@
 
     <div class="overlay" id="gameover">
         <div class="panel">
-            <h2 id="go-title">Game Over</h2>
+            <img id="go-logo" class="title-logo go" alt="Word Fall" />
+            <h2 id="go-title">GAME OVER</h2>
             <p id="go-sub">You let one slip through.</p>
             <div class="stats">
                 <div class="stat"><div class="k">Score</div><div class="v" id="go-score">0</div></div>
