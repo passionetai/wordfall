@@ -3,84 +3,361 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Word Fall Game</title>
+    <title>Word Fall</title>
     <style>
-        body {
-            margin: 0;
+        :root {
+            --bg-0: #05060d;
+            --bg-1: #0c0f1e;
+            --accent: #5af0ff;
+            --accent-2: #ff5ad1;
+            --good: #7CFFB2;
+            --warn: #FFB454;
+            --bad:  #FF5A6E;
+            --text: #e9f2ff;
+            --muted: #8d99b8;
+        }
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0; padding: 0; height: 100%;
+            background: radial-gradient(ellipse at top, var(--bg-1), var(--bg-0) 70%);
+            color: var(--text);
+            font-family: 'Segoe UI', 'SF Pro Display', system-ui, -apple-system, sans-serif;
             overflow: hidden;
-            font-family: Arial, sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
         }
         #game-container {
-            position: relative;
-            width: 100vw;
-            height: 100vh;
+            position: fixed; inset: 0;
+            display: flex; align-items: center; justify-content: center;
         }
-        #ui-container {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
+        canvas {
+            display: block;
+            width: 100%; height: 100%;
+            image-rendering: pixelated;
+        }
+        #hud {
+            position: fixed; top: 0; left: 0; right: 0;
+            display: flex; justify-content: space-between; align-items: flex-start;
+            padding: 18px 24px;
             pointer-events: none;
             z-index: 10;
+            font-weight: 600;
+            letter-spacing: 0.5px;
         }
-        #score-container {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            color: white;
-            font-size: 24px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        .hud-block {
+            background: rgba(10, 14, 30, 0.55);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 12px;
+            padding: 10px 16px;
+            box-shadow: 0 6px 24px rgba(0,0,0,0.4);
         }
-        #game-over {
-            position: absolute;
-            top: 50%;
+        .hud-block .label {
+            font-size: 10px; text-transform: uppercase;
+            color: var(--muted); letter-spacing: 2px;
+        }
+        .hud-block .value {
+            font-size: 22px; line-height: 1.1;
+            font-variant-numeric: tabular-nums;
+        }
+        #hud-left, #hud-right { display: flex; gap: 10px; }
+        #hud-center {
+            display: flex; flex-direction: column; align-items: center; gap: 6px;
+        }
+        #combo-bar {
+            width: 220px; height: 6px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 3px; overflow: hidden;
+        }
+        #combo-bar-fill {
+            height: 100%; width: 0%;
+            background: linear-gradient(90deg, var(--accent), var(--accent-2));
+            transition: width 0.12s ease-out;
+        }
+        #combo-text {
+            font-size: 14px; color: var(--muted);
+            font-variant-numeric: tabular-nums;
+        }
+        #combo-text b {
+            color: var(--accent); font-size: 18px;
+        }
+        #lives-icons { display: flex; gap: 4px; margin-top: 4px; }
+        .heart {
+            width: 14px; height: 14px;
+            background: var(--bad);
+            clip-path: path('M7 13 L1 7 A3.5 3.5 0 0 1 7 3 A3.5 3.5 0 0 1 13 7 Z');
+            transition: opacity 0.3s, transform 0.3s;
+        }
+        .heart.lost { opacity: 0.15; transform: scale(0.7); }
+
+        #input-buffer {
+            position: fixed;
+            bottom: 7%;
             left: 50%;
-            transform: translate(-50%, -50%);
-            color: #ff5555;
-            font-size: 48px;
-            text-align: center;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            transform: translateX(-50%);
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            color: var(--accent);
+            text-shadow: 0 0 24px rgba(90, 240, 255, 0.6);
+            pointer-events: none;
+            z-index: 10;
+            min-height: 40px;
+        }
+        #input-buffer .cursor {
+            display: inline-block; width: 2px; height: 26px;
+            background: var(--accent);
+            margin-left: 2px; vertical-align: middle;
+            animation: blink 1s steps(2) infinite;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        .overlay {
+            position: fixed; inset: 0;
             display: none;
-            pointer-events: auto;
+            align-items: center; justify-content: center;
+            background: rgba(5, 6, 13, 0.78);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            z-index: 20;
+            animation: fade-in 0.3s ease-out;
         }
-        #word-display {
-            position: absolute;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            color: white;
-            font-size: 36px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        .overlay.show { display: flex; }
+        @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+        .panel {
+            text-align: center;
+            padding: 40px 60px;
+            max-width: 540px;
         }
-        #input-display {
-            position: absolute;
-            bottom: 100px;
-            left: 50%;
-            transform: translateX(-50%);
-            color: #55ff55;
-            font-size: 32px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        .panel h1 {
+            font-size: 72px; margin: 0 0 4px;
+            background: linear-gradient(135deg, var(--accent), var(--accent-2));
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            letter-spacing: -1px;
+            font-weight: 800;
+        }
+        .panel h2 {
+            font-size: 42px; margin: 0 0 18px;
+            color: var(--text);
+            letter-spacing: -0.5px;
+        }
+        .panel p {
+            color: var(--muted);
+            font-size: 16px;
+            line-height: 1.6;
+            margin: 0 0 24px;
+        }
+        .panel .tag {
+            color: var(--accent);
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+        .btn {
+            display: inline-block;
+            padding: 14px 32px;
+            margin: 6px;
+            background: linear-gradient(135deg, var(--accent), var(--accent-2));
+            color: #06091a;
+            border: none;
+            border-radius: 999px;
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.15s;
+            box-shadow: 0 10px 30px rgba(90, 240, 255, 0.25);
+        }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(90, 240, 255, 0.4); }
+        .btn:active { transform: translateY(0); }
+        .btn.ghost {
+            background: transparent;
+            color: var(--text);
+            border: 1px solid rgba(255,255,255,0.15);
+            box-shadow: none;
+        }
+        .modes {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin: 14px 0 24px;
+        }
+        .mode {
+            padding: 14px 12px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+        }
+        .mode:hover { background: rgba(255,255,255,0.07); }
+        .mode.selected {
+            border-color: var(--accent);
+            background: rgba(90, 240, 255, 0.08);
+        }
+        .mode .name { font-weight: 700; font-size: 14px; }
+        .mode .desc { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin: 18px 0 24px;
+        }
+        .stat {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            padding: 14px;
+        }
+        .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px; }
+        .stat .v { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+        .hint {
+            position: fixed;
+            bottom: 18px; left: 50%; transform: translateX(-50%);
+            font-size: 11px;
+            color: var(--muted);
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            z-index: 10;
+            pointer-events: none;
+        }
+        .powerups {
+            position: fixed; top: 50%; right: 18px;
+            transform: translateY(-50%);
+            display: flex; flex-direction: column; gap: 8px;
+            z-index: 10;
+        }
+        .pu {
+            width: 44px; height: 44px;
+            border-radius: 10px;
+            background: rgba(10, 14, 30, 0.6);
+            border: 1px solid rgba(255,255,255,0.08);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            font-size: 9px;
+            color: var(--muted);
+            transition: transform 0.15s, border-color 0.15s;
+        }
+        .pu .icon { font-size: 18px; }
+        .pu.ready { color: var(--accent); border-color: var(--accent); cursor: pointer; }
+        .pu.ready:hover { transform: scale(1.08); }
+        #pause-hint {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 32px; color: var(--muted);
+            display: none; z-index: 15;
+            letter-spacing: 4px;
+        }
+        #toast {
+            position: fixed; top: 30%; left: 50%; transform: translateX(-50%);
+            font-size: 48px; font-weight: 800; letter-spacing: 2px;
+            pointer-events: none; z-index: 12;
+            opacity: 0;
+            text-shadow: 0 0 24px currentColor;
         }
     </style>
 </head>
 <body>
-    <div id="game-container"></div>
-    <div id="ui-container">
-        <div id="score-container">
-            <div id="score">Score: 0</div>
-            <div id="level">Level: 1</div>
-            <div id="lives">Lives: 5</div>
+    <div id="game-container">
+        <canvas id="game"></canvas>
+    </div>
+
+    <div id="hud">
+        <div id="hud-left">
+            <div class="hud-block">
+                <div class="label">Score</div>
+                <div class="value" id="score">0</div>
+            </div>
+            <div class="hud-block">
+                <div class="label">Level</div>
+                <div class="value" id="level">1</div>
+            </div>
         </div>
-        <div id="word-display"></div>
-        <div id="input-display"></div>
-        <div id="game-over">
-            <div id="game-over-text">Game Over!</div>
-            <div id="restart-text" style="font-size: 24px; margin-top: 20px;">Click to restart</div>
+        <div id="hud-center">
+            <div id="combo-text">Combo <b id="combo">0</b>x &middot; <span id="mult">1.0</span>x</div>
+            <div id="combo-bar"><div id="combo-bar-fill"></div></div>
+        </div>
+        <div id="hud-right">
+            <div class="hud-block">
+                <div class="label">WPM</div>
+                <div class="value" id="wpm">0</div>
+            </div>
+            <div class="hud-block">
+                <div class="label">Lives</div>
+                <div id="lives-icons"></div>
+            </div>
         </div>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+
+    <div id="input-buffer"></div>
+
+    <div class="powerups" id="powerups">
+        <div class="pu" data-pu="freeze" title="Freeze (F) — Slow time">
+            <div class="icon">&#10052;</div><div>FREEZE</div>
+        </div>
+        <div class="pu" data-pu="bomb" title="Bomb (B) — Clear screen">
+            <div class="icon">&#9728;</div><div>BOMB</div>
+        </div>
+        <div class="pu" data-pu="shield" title="Shield (S) — Block next miss">
+            <div class="icon">&#9650;</div><div>SHIELD</div>
+        </div>
+    </div>
+
+    <div id="pause-hint">PAUSED</div>
+    <div id="toast"></div>
+
+    <div class="hint">Type to shoot &middot; ESC pause &middot; F freeze &middot; B bomb &middot; S shield</div>
+
+    <div class="overlay show" id="menu">
+        <div class="panel">
+            <h1>WORD FALL</h1>
+            <p>Type the falling words before they crash. Build combos, earn power-ups,
+               climb the leaderboard.</p>
+
+            <div class="modes" id="mode-select">
+                <div class="mode selected" data-mode="classic">
+                    <div class="name">CLASSIC</div>
+                    <div class="desc">Steady ramp. 5 lives.</div>
+                </div>
+                <div class="mode" data-mode="sprint">
+                    <div class="name">SPRINT</div>
+                    <div class="desc">90 seconds. Max points.</div>
+                </div>
+                <div class="mode" data-mode="hardcore">
+                    <div class="name">HARDCORE</div>
+                    <div class="desc">One life. Fast as hell.</div>
+                </div>
+            </div>
+
+            <div class="stats">
+                <div class="stat"><div class="k">High Score</div><div class="v" id="hs-score">0</div></div>
+                <div class="stat"><div class="k">Best WPM</div><div class="v" id="hs-wpm">0</div></div>
+                <div class="stat"><div class="k">Best Combo</div><div class="v" id="hs-combo">0</div></div>
+            </div>
+
+            <button class="btn" id="play-btn">Play</button>
+        </div>
+    </div>
+
+    <div class="overlay" id="gameover">
+        <div class="panel">
+            <h2 id="go-title">Game Over</h2>
+            <p id="go-sub">You let one slip through.</p>
+            <div class="stats">
+                <div class="stat"><div class="k">Score</div><div class="v" id="go-score">0</div></div>
+                <div class="stat"><div class="k">WPM</div><div class="v" id="go-wpm">0</div></div>
+                <div class="stat"><div class="k">Best Combo</div><div class="v" id="go-combo">0</div></div>
+            </div>
+            <div id="go-new" style="display:none; color: var(--good); margin-bottom: 16px; font-weight: 600; letter-spacing: 2px;">&#9733; NEW HIGH SCORE &#9733;</div>
+            <button class="btn" id="again-btn">Play Again</button>
+            <button class="btn ghost" id="menu-btn">Main Menu</button>
+        </div>
+    </div>
+
     <script src="game.js"></script>
 </body>
 </html>
