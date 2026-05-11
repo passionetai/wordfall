@@ -245,29 +245,37 @@ const AudioManager = (() => {
             pools[name] = [];
             nextIdx[name] = 0;
             const src = SFX_MANIFEST[name];
-            // Load one instance to validate; clone twice more for pooling.
             const probe = new Audio();
             probe.preload = 'auto';
             probe.src = src;
-            const onResolve = () => bumpAsset();
-            const onFail = () => {
-                failed[name] = true;
-                console.warn('Word Fall: SFX failed to load', name, src);
+            let settled = false;
+            const settle = (ok) => {
+                if (settled) return;
+                settled = true;
+                if (ok) {
+                    pools[name].push(probe);
+                    for (let i = 1; i < 3; i++) {
+                        const c = new Audio();
+                        c.preload = 'auto';
+                        c.src = src;
+                        pools[name].push(c);
+                    }
+                } else {
+                    failed[name] = true;
+                    console.warn('Word Fall: SFX timed out / failed', name, src);
+                }
                 bumpAsset();
             };
-            probe.addEventListener('canplaythrough', () => {
-                pools[name].push(probe);
-                for (let i = 1; i < 3; i++) {
-                    const c = new Audio();
-                    c.preload = 'auto';
-                    c.src = src;
-                    pools[name].push(c);
-                }
-                onResolve();
-            }, { once: true });
-            probe.addEventListener('error', onFail, { once: true });
-            // Begin actual load
-            try { probe.load(); } catch (e) { onFail(); }
+            // Use loadeddata + canplay (more reliable than canplaythrough,
+            // which Chrome often won't fire before audio context unlocks).
+            probe.addEventListener('loadeddata', () => settle(true), { once: true });
+            probe.addEventListener('canplay',    () => settle(true), { once: true });
+            probe.addEventListener('error',      () => settle(false), { once: true });
+            // Safety: if neither fires within 2.5s, assume the file is
+            // reachable (browser is just being lazy) and move on. SFX still
+            // plays when needed; we just stop blocking the boot bar.
+            setTimeout(() => settle(true), 2500);
+            try { probe.load(); } catch (e) { settle(false); }
         });
         // Music element
         musicEl = new Audio();
@@ -275,13 +283,18 @@ const AudioManager = (() => {
         musicEl.loop = true;
         musicEl.src = MUSIC_PATH;
         musicEl.volume = musicVol;
-        musicEl.addEventListener('canplaythrough', () => bumpAsset(), { once: true });
-        musicEl.addEventListener('error', () => {
-            musicFailed = true;
-            console.warn('Word Fall: music failed to load', MUSIC_PATH);
+        let musicSettled = false;
+        const settleMusic = (ok) => {
+            if (musicSettled) return;
+            musicSettled = true;
+            if (!ok) { musicFailed = true; console.warn('Word Fall: music failed', MUSIC_PATH); }
             bumpAsset();
-        }, { once: true });
-        try { musicEl.load(); } catch (e) { musicFailed = true; bumpAsset(); }
+        };
+        musicEl.addEventListener('loadeddata', () => settleMusic(true), { once: true });
+        musicEl.addEventListener('canplay',    () => settleMusic(true), { once: true });
+        musicEl.addEventListener('error',      () => settleMusic(false), { once: true });
+        setTimeout(() => settleMusic(true), 3500);
+        try { musicEl.load(); } catch (e) { settleMusic(false); }
     }
 
     function bumpAsset() {
@@ -673,12 +686,10 @@ function init() {
             setTimeout(() => { if (bootBar) bootBar.classList.remove('show'); }, 300);
         },
     });
-    // Also hide boot bar after images settle if audio is silent / never reports
+    // Unconditional fallback: hide the boot bar after 4s no matter what.
     setTimeout(() => {
-        if (imgDone >= imgTotal && audioDone >= audioTotal) {
-            if (bootBar) bootBar.classList.remove('show');
-        }
-    }, 5000);
+        if (bootBar) bootBar.classList.remove('show');
+    }, 4000);
 }
 
 // Same as preloadAssets but reports per-asset progress.
@@ -3413,9 +3424,13 @@ const Tutorial = (() => {
     ];
 
     function open(onCompleteCb) {
-        onDone = onCompleteCb || null;
+        onDone = (typeof onCompleteCb === 'function') ? onCompleteCb : null;
         stepIdx = 0;
         renderStep();
+        // Hide the menu so its overlay can't intercept clicks meant for
+        // the tutorial buttons (same z-index + backdrop-filter quirk).
+        hide('menu');
+        hide('gameover');
         show('tutorial');
         cancelAnimationFrame(raf);
         const tick = (t) => {
@@ -3430,7 +3445,12 @@ const Tutorial = (() => {
         cancelAnimationFrame(raf); raf = 0;
         try { localStorage.setItem('wordfall_tutorial_completed', 'true'); } catch (e) {}
         const cb = onDone; onDone = null;
-        if (cb) cb(skipped);
+        if (cb) {
+            cb(skipped);
+        } else {
+            // No callback (manual How-to-play) → return to menu.
+            show('menu');
+        }
     }
     function next() {
         if (stepIdx < steps.length - 1) {

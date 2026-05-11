@@ -793,6 +793,11 @@
             font-weight: 400;
         }
 
+        /* Tutorial overlay sits above other overlays (which use z-index: 20)
+           so its buttons cannot be intercepted by anything behind it. */
+        #tutorial { z-index: 26; }
+        #settings-modal, #confirm-reset, #daily-played, #stats-modal { z-index: 22; }
+
         /* Tutorial panel */
         .tutorial-panel {
             max-width: min(560px, 94vw);
