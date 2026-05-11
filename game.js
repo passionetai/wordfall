@@ -273,7 +273,7 @@ function gameOver(reason) {
     game.state = 'gameover';
     Audio.gameOver();
     game.shake = 30;
-    game.flash = 0.6; game.flashColor = '#ff5a6e';
+    game.flash = 0.6; game.flashColor = '#FF1744';
 
     const wpm = currentWPM();
     let isNew = false;
@@ -310,9 +310,10 @@ function pickWord() {
 
 function spawnWord() {
     const text = pickWord();
-    const fontSize = Math.max(18, Math.min(34, 30 - text.length * 0.4));
+    // VT323 reads ~30% smaller per pixel than sans-serif; bump the size accordingly.
+    const fontSize = Math.round(Math.max(18, Math.min(34, 30 - text.length * 0.4)) * 1.3);
     // Measure width with the actual draw font (numeric font size matches drawWords).
-    game.ctx.font = `700 ${fontSize}px 'Segoe UI', system-ui, sans-serif`;
+    game.ctx.font = `400 ${fontSize}px 'VT323', monospace`;
     const tw = game.ctx.measureText(text).width;
     const pad = 60;
     const baseSpeed = 0.020 + (game.level - 1) * 0.0045;
@@ -434,7 +435,7 @@ function completeWord(w) {
     // Floater
     game.floaters.push({
         text: `+${gained}`, x: w.x, y: w.y, vy: -0.06, life: 1000, max: 1000,
-        color: game.combo >= 5 ? '#ff5ad1' : '#7CFFB2',
+        color: game.combo >= 5 ? '#FF2E97' : '#00FF9F',
         size: 24 + Math.min(game.combo, 10),
     });
 
@@ -443,7 +444,7 @@ function completeWord(w) {
         const kinds = ['freeze', 'bomb', 'shield'];
         const kind = kinds[(game.combo / 10 - 1) % kinds.length];
         game.powerups[kind]++;
-        showToast(`POWER-UP: ${kind.toUpperCase()}`, '#5af0ff');
+        showToast(`POWER-UP: ${kind.toUpperCase()}`, '#00F0FF');
         refreshPowerups();
     }
 
@@ -461,9 +462,9 @@ function completeWord(w) {
     if (targetLevel > game.level) {
         game.level = targetLevel;
         Audio.levelUp();
-        showToast(`LEVEL ${game.level}`, '#ff5ad1');
+        showToast(`LEVEL ${game.level}`, '#FF2E97');
         game.spawnInterval = Math.max(550, game.spawnInterval - 130);
-        game.flash = 0.4; game.flashColor = '#5af0ff';
+        game.flash = 0.4; game.flashColor = '#00F0FF';
     }
 
     refreshHUD();
@@ -472,8 +473,8 @@ function completeWord(w) {
 function missWord(w) {
     if (game.shield) {
         game.shield = false;
-        showToast('SHIELD BROKE', '#FFB454');
-        game.flash = 0.5; game.flashColor = '#FFB454';
+        showToast('SHIELD BROKE', '#FF8A00');
+        game.flash = 0.5; game.flashColor = '#FF8A00';
         game.shake = Math.max(game.shake, 8);
         explode(w.x, w.y, 30, 20);
         game.words = game.words.filter(x => x !== w);
@@ -488,7 +489,7 @@ function missWord(w) {
     game.comboTimer = 0;
     Audio.miss();
     game.shake = Math.max(game.shake, 18);
-    game.flash = 0.55; game.flashColor = '#ff5a6e';
+    game.flash = 0.55; game.flashColor = '#FF1744';
     explode(w.x, w.y, 0, 40);
     game.words = game.words.filter(x => x !== w);
     if (game.target === w) { game.target = null; game.input = ''; renderInput(); }
@@ -505,8 +506,8 @@ function usePowerup(kind) {
 
     if (kind === 'freeze') {
         game.freezeTimer = 4500;
-        showToast('FREEZE', '#5af0ff');
-        game.flash = 0.3; game.flashColor = '#5af0ff';
+        showToast('FREEZE', '#00F0FF');
+        game.flash = 0.3; game.flashColor = '#00F0FF';
     } else if (kind === 'bomb') {
         // Clear all words, partial score per word.
         const reward = game.words.length;
@@ -517,11 +518,11 @@ function usePowerup(kind) {
         game.words = [];
         game.target = null; game.input = ''; renderInput();
         game.shake = Math.max(game.shake, 14);
-        game.flash = 0.5; game.flashColor = '#ff5ad1';
-        showToast(`BOMB x${reward}`, '#ff5ad1');
+        game.flash = 0.5; game.flashColor = '#FF2E97';
+        showToast(`BOMB x${reward}`, '#FF2E97');
     } else if (kind === 'shield') {
         game.shield = true;
-        showToast('SHIELD UP', '#7CFFB2');
+        showToast('SHIELD UP', '#00FF9F');
     }
     refreshPowerups();
     refreshHUD();
@@ -749,13 +750,13 @@ function draw(dt) {
     // Freeze tint
     if (game.freezeTimer > 0) {
         const a = Math.min(0.25, game.freezeTimer / 4500 * 0.25);
-        ctx.fillStyle = `rgba(90, 240, 255, ${a})`;
+        ctx.fillStyle = `rgba(0, 240, 255, ${a})`;
         ctx.fillRect(0, 0, w, h);
         // ice frame
         const grad = ctx.createLinearGradient(0, 0, 0, h);
-        grad.addColorStop(0, 'rgba(90,240,255,0.35)');
-        grad.addColorStop(0.5, 'rgba(90,240,255,0)');
-        grad.addColorStop(1, 'rgba(90,240,255,0.35)');
+        grad.addColorStop(0, 'rgba(0, 240, 255, 0.35)');
+        grad.addColorStop(0.5, 'rgba(0, 240, 255, 0)');
+        grad.addColorStop(1, 'rgba(0, 240, 255, 0.35)');
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, w, h);
     }
@@ -778,17 +779,17 @@ function draw(dt) {
 }
 
 function drawBackground(ctx, w, h, dt) {
-    // Deep gradient
+    // Deep gradient — Neon Keys palette
     const grad = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) * 0.7);
-    grad.addColorStop(0, '#0c1230');
-    grad.addColorStop(1, '#04050c');
+    grad.addColorStop(0, '#1A1B3A');
+    grad.addColorStop(1, '#0A0E1A');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
 
     // Parallax grid
     const gridSize = 60;
     const ofs = (game.bgGrid % gridSize);
-    ctx.strokeStyle = 'rgba(120, 160, 255, 0.06)';
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.06)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let x = -ofs; x < w; x += gridSize) {
@@ -799,12 +800,12 @@ function drawBackground(ctx, w, h, dt) {
     }
     ctx.stroke();
 
-    // Stars
+    // Stars (low-alpha bright text color)
     for (const s of game.bgStars) {
         s.y += 0.02 * s.z * dt * (game.freezeTimer > 0 ? 0.25 : 1);
         if (s.y > h) { s.y = -2; s.x = Math.random() * w; }
-        ctx.globalAlpha = s.z;
-        ctx.fillStyle = '#cfe2ff';
+        ctx.globalAlpha = 0.3 + s.z * 0.3;
+        ctx.fillStyle = '#F0F4FF';
         ctx.fillRect(s.x, s.y, s.r, s.r);
     }
     ctx.globalAlpha = 1;
@@ -815,14 +816,14 @@ function drawCannon(ctx, w, h) {
     // Glow
     const r = 80;
     const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    g.addColorStop(0, 'rgba(90,240,255,0.35)');
-    g.addColorStop(1, 'rgba(90,240,255,0)');
+    g.addColorStop(0, 'rgba(0, 240, 255, 0.35)');
+    g.addColorStop(1, 'rgba(0, 240, 255, 0)');
     ctx.fillStyle = g;
     ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
 
     // Base
-    ctx.fillStyle = '#0e1530';
-    ctx.strokeStyle = 'rgba(90,240,255,0.6)';
+    ctx.fillStyle = '#1A1B3A';
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.6)';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(cx, cy, 26, Math.PI, 0);
@@ -835,7 +836,7 @@ function drawCannon(ctx, w, h) {
     // Aim line to target
     if (game.target) {
         ctx.save();
-        ctx.strokeStyle = 'rgba(90,240,255,0.35)';
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.35)';
         ctx.setLineDash([6, 8]);
         ctx.lineWidth = 1.5;
         ctx.beginPath();
@@ -853,14 +854,14 @@ function drawWords(ctx) {
         const x = w.x + xOff;
         const y = w.y;
 
-        ctx.font = `700 ${w.size}px 'Segoe UI', system-ui, sans-serif`;
+        ctx.font = `400 ${w.size}px 'VT323', monospace`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
         // Glow ring (intensifies as it falls)
         const proximity = Math.min(1, w.y / (game.h - 60));
         const glow = isTarget ? 0.9 : 0.3 + proximity * 0.4;
-        ctx.shadowColor = isTarget ? `hsl(180, 100%, 70%)` : `hsl(${w.hue}, 70%, 65%)`;
+        ctx.shadowColor = isTarget ? '#00F0FF' : `hsl(${w.hue}, 70%, 65%)`;
         ctx.shadowBlur = 20 * glow;
 
         // Capsule background for legibility
@@ -868,18 +869,18 @@ function drawWords(ctx) {
         const bgW = w.width + padX * 2;
         const bgH = w.size + padY * 2;
         ctx.shadowBlur = 0;
-        ctx.fillStyle = isTarget ? 'rgba(90, 240, 255, 0.14)' : 'rgba(255,255,255,0.04)';
-        ctx.strokeStyle = isTarget ? 'rgba(90, 240, 255, 0.9)' : `hsla(${w.hue}, 70%, 65%, ${0.25 + proximity * 0.5})`;
+        ctx.fillStyle = isTarget ? 'rgba(0, 240, 255, 0.14)' : 'rgba(240, 244, 255, 0.04)';
+        ctx.strokeStyle = isTarget ? '#00F0FF' : `hsla(${w.hue}, 70%, 65%, ${0.25 + proximity * 0.5})`;
         ctx.lineWidth = isTarget ? 2 : 1.2;
         roundRect(ctx, x - bgW / 2, y - bgH / 2, bgW, bgH, 10);
         ctx.fill();
         ctx.stroke();
 
-        // Re-enable text glow
-        ctx.shadowColor = isTarget ? 'rgba(90,240,255,0.9)' : `hsla(${w.hue}, 80%, 70%, 0.6)`;
-        ctx.shadowBlur = isTarget ? 18 : 6;
+        // Re-enable text glow — locked word gets full neon treatment
+        ctx.shadowColor = isTarget ? '#00F0FF' : `hsla(${w.hue}, 80%, 70%, 0.6)`;
+        ctx.shadowBlur = isTarget ? 20 : 6;
 
-        // Typed prefix (green)
+        // Typed prefix (success green)
         if (w.typed > 0) {
             const typed = w.text.slice(0, w.typed);
             const rest = w.text.slice(w.typed);
@@ -889,13 +890,13 @@ function drawWords(ctx) {
             const restW = ctx.measureText(rest).width;
             const startX = x - totalW / 2;
             ctx.textAlign = 'left';
-            ctx.fillStyle = '#7CFFB2';
+            ctx.fillStyle = '#00FF9F';
             ctx.fillText(typed, startX, y);
-            ctx.fillStyle = isTarget ? '#e9f2ff' : `hsl(${w.hue}, 80%, 78%)`;
+            ctx.fillStyle = isTarget ? '#F0F4FF' : `hsl(${w.hue}, 80%, 78%)`;
             ctx.fillText(rest, startX + typedW, y);
             ctx.textAlign = 'center';
         } else {
-            ctx.fillStyle = isTarget ? '#e9f2ff' : `hsl(${w.hue}, 80%, 78%)`;
+            ctx.fillStyle = isTarget ? '#F0F4FF' : `hsl(${w.hue}, 80%, 78%)`;
             ctx.fillText(w.text, x, y);
         }
         ctx.shadowBlur = 0;
@@ -903,7 +904,7 @@ function drawWords(ctx) {
         // Danger pulse when low
         if (proximity > 0.75) {
             const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.015);
-            ctx.strokeStyle = `rgba(255, 90, 110, ${0.4 + 0.5 * pulse})`;
+            ctx.strokeStyle = `rgba(255, 23, 68, ${0.4 + 0.5 * pulse})`;
             ctx.lineWidth = 2;
             roundRect(ctx, x - bgW / 2 - 2, y - bgH / 2 - 2, bgW + 4, bgH + 4, 12);
             ctx.stroke();
@@ -915,8 +916,8 @@ function drawBullets(ctx) {
     for (const b of game.bullets) {
         const t = b.life / b.max;
         ctx.globalAlpha = Math.max(0, 1 - t);
-        ctx.fillStyle = '#5af0ff';
-        ctx.shadowColor = '#5af0ff';
+        ctx.fillStyle = '#00F0FF';
+        ctx.shadowColor = '#00F0FF';
         ctx.shadowBlur = 14;
         ctx.beginPath();
         ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
@@ -940,11 +941,12 @@ function drawFloaters(ctx) {
     for (const f of game.floaters) {
         const a = Math.min(1, f.life / 400);
         ctx.globalAlpha = a;
-        ctx.font = `800 ${f.size}px 'Segoe UI', system-ui, sans-serif`;
+        // Score popups feel like neon signage.
+        ctx.font = `400 ${Math.round(f.size * 1.1)}px 'Monoton', Impact, sans-serif`;
         ctx.textAlign = 'center';
         ctx.fillStyle = f.color;
         ctx.shadowColor = f.color;
-        ctx.shadowBlur = 14;
+        ctx.shadowBlur = 18;
         ctx.fillText(f.text, f.x, f.y);
         ctx.shadowBlur = 0;
     }
@@ -954,12 +956,12 @@ function drawFloaters(ctx) {
 function drawShieldAura(ctx, w, h) {
     const cx = w / 2, cy = h - 60;
     const r = 90 + 4 * Math.sin(performance.now() * 0.005);
-    ctx.strokeStyle = 'rgba(124, 255, 178, 0.6)';
+    ctx.strokeStyle = 'rgba(0, 255, 159, 0.6)';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.strokeStyle = 'rgba(124, 255, 178, 0.2)';
+    ctx.strokeStyle = 'rgba(0, 255, 159, 0.2)';
     ctx.lineWidth = 6;
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -969,11 +971,11 @@ function drawShieldAura(ctx, w, h) {
 function drawFloor(ctx, w, h) {
     // Danger zone gradient
     const g = ctx.createLinearGradient(0, h - 80, 0, h);
-    g.addColorStop(0, 'rgba(255, 90, 110, 0)');
-    g.addColorStop(1, 'rgba(255, 90, 110, 0.25)');
+    g.addColorStop(0, 'rgba(255, 23, 68, 0)');
+    g.addColorStop(1, 'rgba(255, 23, 68, 0.25)');
     ctx.fillStyle = g;
     ctx.fillRect(0, h - 80, w, 80);
-    ctx.strokeStyle = 'rgba(255, 90, 110, 0.5)';
+    ctx.strokeStyle = 'rgba(255, 23, 68, 0.5)';
     ctx.lineWidth = 1;
     ctx.setLineDash([6, 6]);
     ctx.beginPath();
@@ -985,11 +987,11 @@ function drawFloor(ctx, w, h) {
 function drawSprintTimer(ctx, w) {
     const t = Math.max(0, game.sprintTimeLeft) / 1000;
     const tx = `${t.toFixed(1)}s`;
-    ctx.font = `800 28px 'Segoe UI', system-ui, sans-serif`;
+    ctx.font = `400 36px 'Monoton', Impact, sans-serif`;
     ctx.textAlign = 'center';
-    ctx.fillStyle = t < 10 ? '#ff5a6e' : '#e9f2ff';
+    ctx.fillStyle = t < 10 ? '#FF1744' : '#F0F4FF';
     ctx.shadowColor = ctx.fillStyle;
-    ctx.shadowBlur = 14;
+    ctx.shadowBlur = 18;
     ctx.fillText(tx, w / 2, 80);
     ctx.shadowBlur = 0;
 }

@@ -4,24 +4,42 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Word Fall</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Monoton&family=VT323&family=Inter:wght@400;600;700&display=swap">
     <style>
         :root {
-            --bg-0: #05060d;
-            --bg-1: #0c0f1e;
-            --accent: #5af0ff;
-            --accent-2: #ff5ad1;
-            --good: #7CFFB2;
-            --warn: #FFB454;
-            --bad:  #FF5A6E;
-            --text: #e9f2ff;
-            --muted: #8d99b8;
+            --font-display: 'Monoton', 'Impact', sans-serif;
+            --font-game: 'VT323', 'Courier New', monospace;
+            --font-ui: 'Inter', system-ui, sans-serif;
+            --bg-deep: #0A0E1A;
+            --bg-mid: #1A1B3A;
+            --neon-cyan: #00F0FF;
+            --neon-magenta: #FF2E97;
+            --neon-orange: #FF8A00;
+            --bomb-red: #FF1744;
+            --bonus-gold: #FFD93D;
+            --success-green: #00FF9F;
+            --text-bright: #F0F4FF;
+            --text-dim: #6B7299;
+            /* legacy aliases mapped to the Neon Keys palette */
+            --bg-0: var(--bg-deep);
+            --bg-1: var(--bg-mid);
+            --accent: var(--neon-cyan);
+            --accent-2: var(--neon-magenta);
+            --good: var(--success-green);
+            --warn: var(--neon-orange);
+            --bad: var(--bomb-red);
+            --text: var(--text-bright);
+            --muted: var(--text-dim);
         }
         * { box-sizing: border-box; }
         html, body {
             margin: 0; padding: 0; height: 100%;
-            background: radial-gradient(ellipse at top, var(--bg-1), var(--bg-0) 70%);
-            color: var(--text);
-            font-family: 'Segoe UI', 'SF Pro Display', system-ui, -apple-system, sans-serif;
+            background: var(--bg-deep);
+            background-image: radial-gradient(ellipse at top, var(--bg-mid), var(--bg-deep) 70%);
+            color: var(--text-bright);
+            font-family: var(--font-ui);
             overflow: hidden;
             user-select: none;
             -webkit-user-select: none;
@@ -58,8 +76,14 @@
             color: var(--muted); letter-spacing: 2px;
         }
         .hud-block .value {
+            font-family: var(--font-ui);
+            font-weight: 600;
+            color: var(--text-bright);
             font-size: 22px; line-height: 1.1;
             font-variant-numeric: tabular-nums;
+        }
+        .hud-block .label {
+            font-family: var(--font-ui);
         }
         #hud-left, #hud-right { display: flex; gap: 10px; }
         #hud-center {
@@ -76,11 +100,14 @@
             transition: width 0.12s ease-out;
         }
         #combo-text {
-            font-size: 14px; color: var(--muted);
+            font-family: var(--font-ui);
+            font-weight: 600;
+            font-size: 14px;
+            color: var(--text-bright);
             font-variant-numeric: tabular-nums;
         }
         #combo-text b {
-            color: var(--accent); font-size: 18px;
+            color: var(--neon-cyan); font-size: 18px;
         }
         #lives-icons { display: flex; gap: 4px; margin-top: 4px; }
         .heart {
@@ -100,7 +127,7 @@
             font-weight: 700;
             letter-spacing: 4px;
             color: var(--accent);
-            text-shadow: 0 0 24px rgba(90, 240, 255, 0.6);
+            text-shadow: 0 0 24px rgba(0, 240, 255, 0.6);
             pointer-events: none;
             z-index: 10;
             min-height: 40px;
@@ -132,18 +159,20 @@
             max-width: 540px;
         }
         .panel h1 {
-            font-size: 72px; margin: 0 0 4px;
-            background: linear-gradient(135deg, var(--accent), var(--accent-2));
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
-            letter-spacing: -1px;
-            font-weight: 800;
+            font-family: var(--font-display);
+            font-size: 84px; margin: 0 0 12px;
+            color: var(--neon-cyan);
+            text-shadow: 0 0 12px var(--neon-cyan), 0 0 24px var(--neon-cyan);
+            letter-spacing: 4px;
+            font-weight: 400;
         }
         .panel h2 {
-            font-size: 42px; margin: 0 0 18px;
-            color: var(--text);
-            letter-spacing: -0.5px;
+            font-family: var(--font-display);
+            font-size: 56px; margin: 0 0 18px;
+            color: var(--neon-cyan);
+            text-shadow: 0 0 12px var(--neon-cyan), 0 0 24px var(--neon-cyan);
+            letter-spacing: 3px;
+            font-weight: 400;
         }
         .panel p {
             color: var(--muted);
@@ -158,27 +187,37 @@
         }
         .btn {
             display: inline-block;
-            padding: 14px 32px;
+            padding: 12px 24px;
             margin: 6px;
-            background: linear-gradient(135deg, var(--accent), var(--accent-2));
-            color: #06091a;
-            border: none;
-            border-radius: 999px;
-            font-size: 16px;
-            font-weight: 700;
-            letter-spacing: 1px;
+            background: transparent;
+            color: var(--neon-magenta);
+            border: 2px solid var(--neon-magenta);
+            border-radius: 4px;
+            font-family: var(--font-display);
+            font-size: 22px;
+            font-weight: 400;
+            letter-spacing: 4px;
             text-transform: uppercase;
             cursor: pointer;
-            transition: transform 0.15s, box-shadow 0.15s;
-            box-shadow: 0 10px 30px rgba(90, 240, 255, 0.25);
+            transition: transform 0.15s, box-shadow 0.15s, background 0.15s;
+            text-shadow: 0 0 10px var(--neon-magenta), 0 0 20px var(--neon-magenta);
+            box-shadow: 0 0 12px rgba(255, 46, 151, 0.45), inset 0 0 12px rgba(255, 46, 151, 0.15);
         }
-        .btn:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(90, 240, 255, 0.4); }
+        .btn:hover {
+            transform: translateY(-2px);
+            background: rgba(255, 46, 151, 0.08);
+            box-shadow: 0 0 18px rgba(255, 46, 151, 0.7), inset 0 0 18px rgba(255, 46, 151, 0.2);
+        }
         .btn:active { transform: translateY(0); }
         .btn.ghost {
-            background: transparent;
-            color: var(--text);
-            border: 1px solid rgba(255,255,255,0.15);
-            box-shadow: none;
+            color: var(--neon-cyan);
+            border-color: var(--neon-cyan);
+            text-shadow: 0 0 10px var(--neon-cyan), 0 0 20px var(--neon-cyan);
+            box-shadow: 0 0 12px rgba(0, 240, 255, 0.45), inset 0 0 12px rgba(0, 240, 255, 0.15);
+        }
+        .btn.ghost:hover {
+            background: rgba(0, 240, 255, 0.08);
+            box-shadow: 0 0 18px rgba(0, 240, 255, 0.7), inset 0 0 18px rgba(0, 240, 255, 0.2);
         }
         .modes {
             display: grid;
@@ -197,7 +236,7 @@
         .mode:hover { background: rgba(255,255,255,0.07); }
         .mode.selected {
             border-color: var(--accent);
-            background: rgba(90, 240, 255, 0.08);
+            background: rgba(0, 240, 255, 0.08);
         }
         .mode .name { font-weight: 700; font-size: 14px; }
         .mode .desc { font-size: 11px; color: var(--muted); margin-top: 4px; }
