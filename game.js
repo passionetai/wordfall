@@ -54,6 +54,7 @@ const Assets = {
     iconFreeze: null, iconBomb: null, iconShield: null,
     chainLink: null, bossWarning: null, shardNeon: null,
     shareCardBg: null,
+    iconSettings: null,
 };
 const ASSET_MANIFEST = {
     logo:         'assets/img/logo-wordmark.png',
@@ -68,6 +69,7 @@ const ASSET_MANIFEST = {
     bossWarning:  'assets/img/boss-warning.png',
     shardNeon:    'assets/vfx/shard-neon.png',
     shareCardBg:  'assets/img/share-card-bg.png',
+    iconSettings: 'assets/icons/icon-settings.png',
 };
 const PU_ICON = { freeze: 'iconFreeze', bomb: 'iconBomb', shield: 'iconShield' };
 
@@ -199,6 +201,168 @@ const Audio = (() => {
             setTimeout(() => tone(1760, 0.18, 'sine',     0.22, 2640), 140);
             setTimeout(() => tone(2349, 0.30, 'sine',     0.18, 3520), 260);
         },
+    };
+})();
+
+// ---------- Audio Manager (Step 5) ----------
+// Wraps the procedural Audio module from Step 1. Loads sampled SFX + a music
+// loop. If any file fails to load, that sound silently falls back to the
+// procedural beep. Music waits for the first user interaction (autoplay rule).
+const SFX_MANIFEST = {
+    type:           'assets/audio/sfx-type.mp3',
+    lock:           'assets/audio/sfx-lock.mp3',
+    destroy:        'assets/audio/sfx-destroy.mp3',
+    combo:          'assets/audio/sfx-combo.mp3',
+    powerup:        'assets/audio/sfx-powerup.mp3',
+    bomb:           'assets/audio/sfx-bomb.mp3',
+    'boss-warning': 'assets/audio/sfx-boss-warning.mp3',
+    'boss-defeat':  'assets/audio/sfx-boss-defeat.mp3',
+};
+const MUSIC_PATH = 'assets/audio/music-main-loop.mp3';
+
+const AudioManager = (() => {
+    const pools = {};        // name → [Audio, Audio, Audio]
+    const failed = {};       // name → true
+    let nextIdx = {};
+    let musicEl = null;
+    let musicFailed = false;
+    let musicStarted = false;
+    let musicEnabled = true;
+    let sfxEnabled = true;
+    let musicVol = 0.4;      // current target volume
+    let sfxVol = 0.6;
+    let baseMusicVol = 0.4;  // pre-duck level
+    let duckEndAt = 0;       // timestamp until which music is ducked
+    let totalAssets = Object.keys(SFX_MANIFEST).length + 1; // sfx + 1 music
+    let loadedAssets = 0;
+    let onProgress = null;
+    let onReady = null;
+
+    function preload(opts = {}) {
+        onProgress = opts.onProgress || null;
+        onReady    = opts.onReady    || null;
+        Object.keys(SFX_MANIFEST).forEach(name => {
+            pools[name] = [];
+            nextIdx[name] = 0;
+            const src = SFX_MANIFEST[name];
+            // Load one instance to validate; clone twice more for pooling.
+            const probe = new Audio();
+            probe.preload = 'auto';
+            probe.src = src;
+            const onResolve = () => bumpAsset();
+            const onFail = () => {
+                failed[name] = true;
+                console.warn('Word Fall: SFX failed to load', name, src);
+                bumpAsset();
+            };
+            probe.addEventListener('canplaythrough', () => {
+                pools[name].push(probe);
+                for (let i = 1; i < 3; i++) {
+                    const c = new Audio();
+                    c.preload = 'auto';
+                    c.src = src;
+                    pools[name].push(c);
+                }
+                onResolve();
+            }, { once: true });
+            probe.addEventListener('error', onFail, { once: true });
+            // Begin actual load
+            try { probe.load(); } catch (e) { onFail(); }
+        });
+        // Music element
+        musicEl = new Audio();
+        musicEl.preload = 'auto';
+        musicEl.loop = true;
+        musicEl.src = MUSIC_PATH;
+        musicEl.volume = musicVol;
+        musicEl.addEventListener('canplaythrough', () => bumpAsset(), { once: true });
+        musicEl.addEventListener('error', () => {
+            musicFailed = true;
+            console.warn('Word Fall: music failed to load', MUSIC_PATH);
+            bumpAsset();
+        }, { once: true });
+        try { musicEl.load(); } catch (e) { musicFailed = true; bumpAsset(); }
+    }
+
+    function bumpAsset() {
+        loadedAssets++;
+        if (onProgress) onProgress(loadedAssets, totalAssets);
+        if (loadedAssets >= totalAssets && onReady) {
+            const cb = onReady; onReady = null; cb();
+        }
+    }
+
+    function playSFX(name, fallbackFn, opts = {}) {
+        if (!sfxEnabled) return;
+        if (failed[name] || !pools[name] || !pools[name].length) {
+            if (typeof fallbackFn === 'function') { try { fallbackFn(); } catch (e) {} }
+            return;
+        }
+        const pool = pools[name];
+        const a = pool[nextIdx[name]];
+        nextIdx[name] = (nextIdx[name] + 1) % pool.length;
+        try {
+            a.pause();
+            a.currentTime = 0;
+            a.volume = sfxVol * (opts.volume != null ? opts.volume : 1);
+            if (opts.playbackRate != null) a.playbackRate = opts.playbackRate;
+            else a.playbackRate = 1;
+            const p = a.play();
+            if (p && p.catch) p.catch(() => {});
+        } catch (e) { /* swallow */ }
+    }
+
+    function playMusic() {
+        if (!musicEnabled || musicFailed || !musicEl) return;
+        const p = musicEl.play();
+        if (p && p.catch) p.catch(() => {});
+        musicStarted = true;
+    }
+    function pauseMusic() {
+        if (musicEl) { try { musicEl.pause(); } catch (e) {} }
+    }
+    function resumeMusic() {
+        if (!musicEnabled || musicFailed || !musicEl) return;
+        const p = musicEl.play();
+        if (p && p.catch) p.catch(() => {});
+    }
+    function setMusicVolume(v) {
+        musicVol = Math.max(0, Math.min(1, v));
+        baseMusicVol = musicVol;
+        if (musicEl) musicEl.volume = duckEndAt > performance.now() ? musicVol * 0.3 : musicVol;
+    }
+    function setSFXVolume(v) {
+        sfxVol = Math.max(0, Math.min(1, v));
+    }
+    function setMusicEnabled(on) {
+        musicEnabled = !!on;
+        if (!musicEnabled) pauseMusic();
+        else if (musicStarted) resumeMusic();
+    }
+    function setSFXEnabled(on) {
+        sfxEnabled = !!on;
+    }
+    function duck(ms = 2000, factor = 0.3) {
+        duckEndAt = performance.now() + ms;
+        if (musicEl) musicEl.volume = baseMusicVol * factor;
+        setTimeout(() => {
+            if (performance.now() >= duckEndAt - 16 && musicEl) musicEl.volume = baseMusicVol;
+        }, ms);
+    }
+    function isReady() { return loadedAssets >= totalAssets; }
+    function progress() { return totalAssets > 0 ? loadedAssets / totalAssets : 0; }
+    function musicAvailable() { return !musicFailed && !!musicEl; }
+
+    return {
+        preload,
+        playSFX,
+        playMusic, pauseMusic, resumeMusic,
+        setMusicVolume, setSFXVolume,
+        setMusicEnabled, setSFXEnabled,
+        duck,
+        isReady, progress,
+        musicAvailable,
+        _isStarted() { return musicStarted; },
     };
 })();
 
@@ -450,12 +614,20 @@ function init() {
     game.canvas = document.getElementById('game');
     game.ctx = game.canvas.getContext('2d');
     game.high = loadHigh();
+    Settings.load();
+    Settings.apply();
     refreshHighUI();
     resize();
     seedStars();
     window.addEventListener('resize', resize);
     document.addEventListener('keydown', onKey);
-    document.addEventListener('pointerdown', () => Audio.resume(), { once: true });
+    // First user interaction unlocks WebAudio AND starts the music loop.
+    const firstInteraction = () => {
+        Audio.resume();
+        if (Settings.values.musicOn) AudioManager.playMusic();
+    };
+    document.addEventListener('pointerdown', firstInteraction, { once: true });
+    document.addEventListener('keydown',     firstInteraction, { once: true });
     document.addEventListener('mousemove', e => { game.cursorX = e.clientX; game.cursorY = e.clientY; });
     game.canvas.addEventListener('click', onCanvasClick);
 
@@ -466,12 +638,65 @@ function init() {
             game.mode = el.dataset.mode;
         });
     });
-    document.getElementById('play-btn').addEventListener('click', startGame);
+    document.getElementById('play-btn').addEventListener('click', onPlayClicked);
     document.getElementById('again-btn').addEventListener('click', startGame);
     document.getElementById('menu-btn').addEventListener('click', toMenu);
 
+    // Start the render loop early so the loading screen has motion.
     requestAnimationFrame(loop);
-    preloadAssets(() => { applyLogoAssets(); game.state = 'menu'; });
+
+    // Boot progress bar: track image-asset load + audio asset load together.
+    const bootBar = document.getElementById('boot-progress');
+    if (bootBar) bootBar.classList.add('show');
+    let imgDone = 0, imgTotal = Object.keys(ASSET_MANIFEST).length;
+    let audioDone = 0, audioTotal = Object.keys(SFX_MANIFEST).length + 1;
+    const updateBoot = () => {
+        const total = imgTotal + audioTotal;
+        const done  = imgDone + audioDone;
+        const pct = total > 0 ? (done / total) * 100 : 0;
+        const fill = bootBar && bootBar.firstElementChild;
+        if (fill) fill.style.width = pct + '%';
+    };
+    // Wrap preloadAssets to track image progress
+    preloadAssetsWithProgress(() => { imgDone++; updateBoot(); }, () => {
+        applyLogoAssets();
+        // Once images are done we can show the menu; audio finishes in background.
+        game.state = 'menu';
+    });
+
+    // Kick off audio preload in parallel
+    AudioManager.preload({
+        onProgress: (done, total) => { audioDone = done; audioTotal = total; updateBoot(); },
+        onReady: () => {
+            audioTotal = audioTotal || 0;
+            // hide boot bar once both audio + images are settled
+            setTimeout(() => { if (bootBar) bootBar.classList.remove('show'); }, 300);
+        },
+    });
+    // Also hide boot bar after images settle if audio is silent / never reports
+    setTimeout(() => {
+        if (imgDone >= imgTotal && audioDone >= audioTotal) {
+            if (bootBar) bootBar.classList.remove('show');
+        }
+    }, 5000);
+}
+
+// Same as preloadAssets but reports per-asset progress.
+function preloadAssetsWithProgress(onEach, onComplete) {
+    const keys = Object.keys(ASSET_MANIFEST);
+    let done = 0;
+    const tick = () => { if (++done >= keys.length) onComplete(); };
+    keys.forEach(key => {
+        const img = new Image();
+        img.onload  = () => { Assets[key] = img; onEach && onEach(); tick(); };
+        img.onerror = () => {
+            Assets[key] = null;
+            console.warn('Word Fall: failed to load asset', key, '→', ASSET_MANIFEST[key]);
+            onEach && onEach();
+            tick();
+        };
+        img.src = ASSET_MANIFEST[key];
+    });
 }
 
 function applyLogoAssets() {
@@ -665,6 +890,7 @@ function detonationGameOver() {
     game.shake = 40;
     game.flash = 0.85; game.flashColor = '#FF1744';
     Audio.bombDetonate();
+    AudioManager.playSFX('bomb', () => {}, { volume: 1 });
 }
 
 // ---------- Spawning ----------
@@ -813,6 +1039,8 @@ function startBossWarning() {
     game.bossState = 'warning';
     game.bossWarnT = 2000;
     Audio.bossWarning();
+    AudioManager.playSFX('boss-warning', () => {}, { volume: 1 });
+    AudioManager.duck(2000, 0.3);
     game.shake = Math.max(game.shake, 12);
     // Pause currently-falling words during warning.
     for (const w of game.words) w.pausedByBoss = true;
@@ -858,6 +1086,7 @@ function bossDefeated(boss) {
     game.shake = Math.max(game.shake, 25);
     setTimeout(() => game.shake = Math.max(game.shake, 12), 200);
     Audio.bossDefeated();
+    AudioManager.playSFX('boss-defeat', () => {}, { volume: 1 });
     game.score += 1000;
     game.floaters.push({
         text: '+1000  BOSS DOWN', x: boss.x, y: boss.y, vy: -0.06,
@@ -901,8 +1130,17 @@ function bossEscaped(boss) {
 // ---------- Input ----------
 function onKey(e) {
     if (e.key === 'Escape') {
-        if (game.state === 'playing') { game.state = 'paused'; document.getElementById('pause-hint').style.display = 'block'; }
-        else if (game.state === 'paused') { game.state = 'playing'; document.getElementById('pause-hint').style.display = 'none'; game.last = performance.now(); }
+        if (game.state === 'playing') {
+            game.state = 'paused';
+            document.getElementById('pause-hint').classList.add('show');
+            AudioManager.pauseMusic();
+        }
+        else if (game.state === 'paused') {
+            game.state = 'playing';
+            document.getElementById('pause-hint').classList.remove('show');
+            if (Settings.values.musicOn) AudioManager.resumeMusic();
+            game.last = performance.now();
+        }
         return;
     }
     if (game.state !== 'playing') {
@@ -943,7 +1181,12 @@ function onKey(e) {
             game.charsTyped++;
             spawnBullet(best);
             Audio.lockOn();
+            AudioManager.playSFX('lock', () => {}, { volume: 0.8 });
             Audio.keyHit(1 / best.text.length);
+            AudioManager.playSFX('type', () => {}, {
+                volume: 0.3,
+                playbackRate: 0.92 + Math.random() * 0.16,
+            });
             renderInput();
             // Twin lock-on triggers partner freeze.
             if (best.type === 'twin' && best.partner && !best.partner.completed) {
@@ -978,6 +1221,10 @@ function onKey(e) {
         } else {
             spawnBullet(game.target);
             Audio.keyHit(game.target.typed / game.target.text.length);
+            AudioManager.playSFX('type', () => {}, {
+                volume: 0.3,
+                playbackRate: 0.92 + Math.random() * 0.16,
+            });
         }
         renderInput();
         if (game.target.typed === game.target.text.length) completeWord(game.target);
@@ -1103,6 +1350,7 @@ function completeWord(w) {
         }
     } else {
         Audio.wordComplete(game.combo);
+        AudioManager.playSFX('destroy', () => {}, { volume: 0.8 });
         explodeAt(w.x, w.y, true, 28, 'cyan');
     }
 
@@ -1131,6 +1379,7 @@ function comboMilestoneCheck() {
         game.powerups[kind]++;
         showToast(`POWER-UP: ${kind.toUpperCase()}`, '#00F0FF');
         burstAtCannon(36, 'magenta');
+        AudioManager.playSFX('combo', () => {}, { volume: 0.9 });
     }
 }
 
@@ -1219,6 +1468,7 @@ function usePowerup(kind) {
     if (game.powerups[kind] <= 0) return;
     game.powerups[kind]--;
     Audio.powerup(kind);
+    AudioManager.playSFX('powerup', () => {}, { volume: 0.9 });
 
     if (kind === 'freeze') {
         game.freezeTimer = 4500;
@@ -1264,6 +1514,7 @@ function pickSparkKind(palette) {
 }
 
 function explodeAt(x, y, _locked, count = 28, palette = 'mix') {
+    count = Math.max(1, Math.round(count * particleCountScale()));
     for (let i = 0; i < count; i++) {
         const a = Math.random() * Math.PI * 2;
         const s = 0.05 + Math.random() * 0.5;
@@ -1281,6 +1532,7 @@ function explodeAt(x, y, _locked, count = 28, palette = 'mix') {
 }
 
 function burstAtCannon(count, biasKind) {
+    count = Math.max(1, Math.round(count * particleCountScale()));
     const cx = game.w / 2;
     const cy = game.h - 90;
     for (let i = 0; i < count; i++) {
@@ -1304,7 +1556,8 @@ function burstAtCannon(count, biasKind) {
 
 function spawnLetterShatter(x, y) {
     // Glass-shard particles for boss letter shatter.
-    for (let i = 0; i < 18; i++) {
+    const n = Math.max(2, Math.round(18 * particleCountScale()));
+    for (let i = 0; i < n; i++) {
         const a = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.4;
         const s = 0.12 + Math.random() * 0.45;
         game.particles.push({
@@ -1377,6 +1630,11 @@ function currentWPM() {
 function loop(now) {
     const dt = Math.min(64, now - (game.last || now));
     game.last = now;
+    // FPS smoothing (Step 5)
+    if (dt > 0) {
+        const inst = 1000 / dt;
+        game.fps = (game.fps == null) ? inst : (game.fps * 0.92 + inst * 0.08);
+    }
 
     if (game.state === 'loading') {
         game.loadT += dt;
@@ -1577,8 +1835,9 @@ function draw(dt) {
     const ctx = game.ctx;
     const w = game.w, h = game.h;
     ctx.save();
-    if (game.shake > 0) {
-        ctx.translate((Math.random() - 0.5) * game.shake, (Math.random() - 0.5) * game.shake);
+    const effShake = reduceMotion() ? 0 : game.shake;
+    if (effShake > 0) {
+        ctx.translate((Math.random() - 0.5) * effShake, (Math.random() - 0.5) * effShake);
     }
 
     drawBackground(ctx, w, h, dt);
@@ -1616,6 +1875,8 @@ function draw(dt) {
 
     // Step 4: touch overlays
     drawStep4Overlays(ctx);
+    // Step 5: FPS counter
+    if (Settings.values.showFPS) drawFPS(ctx);
 
     ctx.restore();
 }
@@ -2994,10 +3255,12 @@ function wireTouchHandlers() {
         if (isTouchActive() && hitTestPauseBtn(x, y)) {
             if (game.state === 'playing') {
                 game.state = 'paused';
-                document.getElementById('pause-hint').style.display = 'block';
+                document.getElementById('pause-hint').classList.add('show');
+                AudioManager.pauseMusic();
             } else if (game.state === 'paused') {
                 game.state = 'playing';
-                document.getElementById('pause-hint').style.display = 'none';
+                document.getElementById('pause-hint').classList.remove('show');
+                if (Settings.values.musicOn) AudioManager.resumeMusic();
                 game.last = performance.now();
             }
             e.preventDefault();
@@ -3048,9 +3311,431 @@ function drawStep4Overlays(ctx) {
     drawTouchPauseButton(ctx);
 }
 
+function drawFPS(ctx) {
+    const fps = Math.round(game.fps || 0);
+    ctx.save();
+    ctx.font = "400 14px VT323, monospace";
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    const txt = `${fps} FPS`;
+    const padX = 8;
+    const w = ctx.measureText(txt).width + padX * 2;
+    const h = 20;
+    // Avoid overlapping the touch pause button (top-right 48px square).
+    const yOff = isTouchActive() ? 64 + 8 : 64;
+    const x = game.w - 12;
+    const y = yOff;
+    ctx.fillStyle = 'rgba(10, 14, 26, 0.7)';
+    ctx.fillRect(x - w, y, w, h);
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.4)';
+    ctx.strokeRect(x - w + 0.5, y + 0.5, w - 1, h - 1);
+    ctx.fillStyle = fps < 30 ? '#FF8A00' : '#00F0FF';
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.shadowBlur = 6;
+    ctx.fillText(txt, x - padX, y + 3);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+// ====================================================================
+// Step 5 — Settings module
+// ====================================================================
+const Settings = (() => {
+    const KEY = 'wordfall_settings';
+    const defaults = {
+        musicVol: 40,
+        sfxVol: 60,
+        musicOn: true,
+        sfxOn: true,
+        reduceMotion: false,
+        showFPS: false,
+    };
+    const values = { ...defaults };
+
+    function load() {
+        try {
+            const raw = localStorage.getItem(KEY);
+            if (!raw) return;
+            const data = JSON.parse(raw);
+            Object.assign(values, data);
+        } catch (e) {}
+    }
+    function save() {
+        try { localStorage.setItem(KEY, JSON.stringify(values)); } catch (e) {}
+    }
+    function apply() {
+        AudioManager.setMusicVolume(values.musicVol / 100);
+        AudioManager.setSFXVolume(values.sfxVol / 100);
+        AudioManager.setMusicEnabled(values.musicOn);
+        AudioManager.setSFXEnabled(values.sfxOn);
+    }
+    function set(k, v) {
+        values[k] = v;
+        save();
+        apply();
+    }
+    return { values, load, save, apply, set, defaults };
+})();
+
+function reduceMotion() { return !!Settings.values.reduceMotion; }
+function shakeAllowed(amount) { return reduceMotion() ? 0 : amount; }
+function particleCountScale() { return reduceMotion() ? 0.3 : 1; }
+
+// ====================================================================
+// Step 5 — Tutorial overlay
+// ====================================================================
+const Tutorial = (() => {
+    let stepIdx = 0;
+    let onDone = null;
+    let demoT = 0;
+    let raf = 0;
+    const steps = [
+        {
+            title: 'TYPE TO TARGET',
+            body: 'Type any letter to lock onto the lowest word starting with that letter.',
+            draw: drawDemoType,
+        },
+        {
+            title: 'BUILD COMBOS',
+            body: 'Chain successful words to build your combo multiplier up to 6×. Every 10 combo grants a power-up.',
+            draw: drawDemoCombo,
+        },
+        {
+            title: 'USE POWER-UPS',
+            body: 'Press F to FREEZE time, B to BOMB the screen, S to SHIELD a miss.',
+            draw: drawDemoPowerups,
+        },
+        {
+            title: 'WATCH FOR DANGER',
+            body: 'Red bombs end the run instantly. Gold bonuses grant power-ups. Green twins are linked — type both quickly. Every 5 levels: BOSS.',
+            draw: drawDemoWordTypes,
+        },
+    ];
+
+    function open(onCompleteCb) {
+        onDone = onCompleteCb || null;
+        stepIdx = 0;
+        renderStep();
+        show('tutorial');
+        cancelAnimationFrame(raf);
+        const tick = (t) => {
+            demoT = t;
+            renderCanvas();
+            raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+    }
+    function close(skipped) {
+        hide('tutorial');
+        cancelAnimationFrame(raf); raf = 0;
+        try { localStorage.setItem('wordfall_tutorial_completed', 'true'); } catch (e) {}
+        const cb = onDone; onDone = null;
+        if (cb) cb(skipped);
+    }
+    function next() {
+        if (stepIdx < steps.length - 1) {
+            stepIdx++;
+            renderStep();
+        } else {
+            close(false);
+        }
+    }
+    function prev() {
+        if (stepIdx > 0) { stepIdx--; renderStep(); }
+    }
+    function renderStep() {
+        const s = steps[stepIdx];
+        document.getElementById('tut-title').textContent = s.title;
+        document.getElementById('tut-body').textContent = s.body;
+        const dots = document.getElementById('tut-dots');
+        dots.innerHTML = steps.map((_, i) =>
+            `<span class="dot ${i === stepIdx ? 'active' : ''}"></span>`).join('');
+        document.getElementById('tut-prev').style.visibility = stepIdx === 0 ? 'hidden' : 'visible';
+        document.getElementById('tut-next').textContent = (stepIdx === steps.length - 1) ? 'Start Playing' : 'Next';
+    }
+    function renderCanvas() {
+        const cv = document.getElementById('tut-canvas');
+        if (!cv) return;
+        const ctx = cv.getContext('2d');
+        const w = cv.width, h = cv.height;
+        ctx.clearRect(0, 0, w, h);
+        // Subtle gradient background
+        const grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, '#0c1230');
+        grad.addColorStop(1, '#0A0E1A');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, w, h);
+        steps[stepIdx].draw(ctx, w, h, demoT);
+    }
+
+    function drawDemoType(ctx, w, h, t) {
+        // Animated falling word with a target letter pulse
+        const cycle = (t / 1600) % 1;
+        const y = 30 + cycle * (h - 60);
+        ctx.font = "26px VT323, monospace";
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.strokeStyle = '#0A0E1A'; ctx.lineWidth = 3;
+        ctx.strokeText('rocket', w / 2, y);
+        // typed prefix
+        ctx.fillStyle = '#FFD93D';
+        ctx.shadowColor = '#FFD93D'; ctx.shadowBlur = 10;
+        ctx.fillText('r', w / 2 - 36, y);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#00F0FF';
+        ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 12;
+        ctx.fillText('ocket', w / 2 + 8, y);
+        ctx.shadowBlur = 0;
+        // Cannon
+        ctx.fillStyle = '#00F0FF';
+        ctx.beginPath();
+        ctx.arc(w / 2, h - 16, 8, 0, Math.PI * 2);
+        ctx.fill();
+        // Key hint
+        ctx.font = "20px VT323, monospace";
+        const pulse = 0.6 + 0.4 * Math.abs(Math.sin(t / 300));
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = '#FF2E97';
+        ctx.shadowColor = '#FF2E97'; ctx.shadowBlur = 10;
+        ctx.fillText('press R', w / 2, 20);
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+    }
+    function drawDemoCombo(ctx, w, h, t) {
+        const phase = (t / 1500) % 1;
+        const combo = Math.floor(phase * 27);
+        ctx.font = "400 64px 'Monoton', Impact, sans-serif";
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#00F0FF';
+        ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 18;
+        ctx.fillText(combo + 'x', w / 2, h / 2);
+        ctx.shadowBlur = 0;
+        ctx.font = "14px VT323, monospace";
+        ctx.fillStyle = '#FFD93D';
+        ctx.fillText('COMBO', w / 2, h / 2 + 50);
+        // Bar
+        const bw = w * 0.6;
+        const bx = (w - bw) / 2;
+        const by = h - 22;
+        ctx.fillStyle = 'rgba(255,255,255,0.1)';
+        ctx.fillRect(bx, by, bw, 4);
+        const grad2 = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+        grad2.addColorStop(0, '#00F0FF'); grad2.addColorStop(1, '#FF2E97');
+        ctx.fillStyle = grad2;
+        ctx.fillRect(bx, by, bw * phase, 4);
+    }
+    function drawDemoPowerups(ctx, w, h, t) {
+        const labels = ['F', 'B', 'S'];
+        const names = ['FREEZE', 'BOMB', 'SHIELD'];
+        const sz = 64;
+        const gap = 30;
+        const total = labels.length * sz + (labels.length - 1) * gap;
+        const x0 = (w - total) / 2;
+        const y0 = h / 2 - sz / 2;
+        labels.forEach((ltr, i) => {
+            const x = x0 + i * (sz + gap);
+            const pulse = 0.7 + 0.3 * Math.sin(t / 400 + i);
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(x + sz / 2, y0 + sz / 2, sz / 2 + 4, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(0,240,255,${0.15 * pulse})`;
+            ctx.fill();
+            ctx.fillStyle = 'rgba(0,0,0,0.6)';
+            ctx.strokeStyle = '#00F0FF';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x + sz / 2, y0 + sz / 2, sz / 2, 0, Math.PI * 2);
+            ctx.fill(); ctx.stroke();
+            ctx.font = "400 32px 'Monoton', Impact, sans-serif";
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillStyle = '#00F0FF';
+            ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 10;
+            ctx.fillText(ltr, x + sz / 2, y0 + sz / 2 + 1);
+            ctx.shadowBlur = 0;
+            ctx.font = "12px VT323, monospace";
+            ctx.fillStyle = '#F0F4FF';
+            ctx.fillText(names[i], x + sz / 2, y0 + sz + 14);
+            ctx.restore();
+        });
+    }
+    function drawDemoWordTypes(ctx, w, h, t) {
+        ctx.font = "20px VT323, monospace";
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        const samples = [
+            { color: '#F0F4FF', glow: '#F0F4FF', text: 'rocket',  label: 'normal' },
+            { color: '#FF1744', glow: '#FF1744', text: 'BOMB!',  label: 'bomb — instant lose' },
+            { color: '#FFD93D', glow: '#FFD93D', text: 'BONUS',  label: 'bonus — grants power-up' },
+            { color: '#00FF9F', glow: '#00FF9F', text: 'TWIN',   label: 'twin — chained pair' },
+        ];
+        const startX = 24;
+        const stepY = 36;
+        const pulse = 0.7 + 0.3 * Math.sin(t / 350);
+        samples.forEach((s, i) => {
+            const y = 28 + i * stepY;
+            ctx.fillStyle = s.color;
+            ctx.shadowColor = s.glow;
+            ctx.shadowBlur = 12 * pulse;
+            ctx.fillText(s.text, startX, y);
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#6B7299';
+            ctx.font = "13px Inter, sans-serif";
+            ctx.fillText(s.label, startX + 120, y);
+            ctx.font = "20px VT323, monospace";
+        });
+    }
+
+    return { open, close, next, prev };
+})();
+
+// ====================================================================
+// Step 5 — Play button gating (tutorial on first launch)
+// ====================================================================
+function onPlayClicked() {
+    const done = localStorage.getItem('wordfall_tutorial_completed') === 'true';
+    if (!done) {
+        Tutorial.open((skipped) => { startGame(); });
+    } else {
+        startGame();
+    }
+}
+
+function wireStep5DOM() {
+    // Gear icon — swap in image if asset loaded
+    const gearBtn = document.getElementById('settings-btn');
+    if (gearBtn) {
+        if (Assets.iconSettings) {
+            gearBtn.innerHTML = '';
+            const img = document.createElement('img');
+            img.src = Assets.iconSettings.src;
+            img.alt = '';
+            gearBtn.appendChild(img);
+        }
+        gearBtn.addEventListener('click', () => {
+            populateSettingsModal();
+            show('settings-modal');
+        });
+    }
+    const howBtn = document.getElementById('how-btn');
+    if (howBtn) howBtn.addEventListener('click', () => Tutorial.open(() => {}));
+
+    // Settings close
+    const sx = document.getElementById('settings-close');
+    if (sx) sx.addEventListener('click', () => hide('settings-modal'));
+
+    // Sliders
+    const musicVol = document.getElementById('music-vol');
+    const sfxVol   = document.getElementById('sfx-vol');
+    const musicNum = document.getElementById('music-vol-num');
+    const sfxNum   = document.getElementById('sfx-vol-num');
+    function updateRangeFill(input) {
+        const pct = ((+input.value - input.min) / (input.max - input.min)) * 100;
+        input.style.backgroundSize = pct + '% 100%';
+    }
+    if (musicVol) {
+        musicVol.value = Settings.values.musicVol;
+        if (musicNum) musicNum.textContent = Settings.values.musicVol;
+        updateRangeFill(musicVol);
+        musicVol.addEventListener('input', () => {
+            const v = +musicVol.value;
+            Settings.set('musicVol', v);
+            if (musicNum) musicNum.textContent = v;
+            updateRangeFill(musicVol);
+        });
+    }
+    if (sfxVol) {
+        sfxVol.value = Settings.values.sfxVol;
+        if (sfxNum) sfxNum.textContent = Settings.values.sfxVol;
+        updateRangeFill(sfxVol);
+        sfxVol.addEventListener('input', () => {
+            const v = +sfxVol.value;
+            Settings.set('sfxVol', v);
+            if (sfxNum) sfxNum.textContent = v;
+            updateRangeFill(sfxVol);
+        });
+    }
+
+    // Toggles
+    const bindToggle = (id, key) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.checked = !!Settings.values[key];
+        el.addEventListener('change', () => Settings.set(key, el.checked));
+    };
+    bindToggle('music-on',      'musicOn');
+    bindToggle('sfx-on',        'sfxOn');
+    bindToggle('reduce-motion', 'reduceMotion');
+    bindToggle('show-fps',      'showFPS');
+
+    // Reset stats
+    const resetBtn = document.getElementById('reset-stats-btn');
+    if (resetBtn) resetBtn.addEventListener('click', () => show('confirm-reset'));
+    const cancelBtn = document.getElementById('confirm-cancel');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => hide('confirm-reset'));
+    const confirmYes = document.getElementById('confirm-reset-yes');
+    if (confirmYes) confirmYes.addEventListener('click', () => {
+        try {
+            localStorage.removeItem('wordfall.high');
+            localStorage.removeItem('wordfall_lifetime_stats');
+            localStorage.removeItem('wordfall_achievements');
+            // Daily history
+            const keysToDelete = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.startsWith('wordfall_daily_')) keysToDelete.push(k);
+            }
+            keysToDelete.forEach(k => localStorage.removeItem(k));
+        } catch (e) {}
+        // Reset in-memory state
+        game.high = loadHigh();
+        refreshHighUI();
+        if (typeof refreshDailyCard === 'function') refreshDailyCard();
+        hide('confirm-reset');
+        hide('settings-modal');
+        shareToast('Stats reset');
+    });
+
+    // Tutorial buttons
+    const tutNext = document.getElementById('tut-next');
+    const tutPrev = document.getElementById('tut-prev');
+    const tutSkip = document.getElementById('tut-skip');
+    if (tutNext) tutNext.addEventListener('click', () => Tutorial.next());
+    if (tutPrev) tutPrev.addEventListener('click', () => Tutorial.prev());
+    if (tutSkip) tutSkip.addEventListener('click', () => Tutorial.close(true));
+}
+
+function populateSettingsModal() {
+    // Mirror current values into the inputs (in case anything changed externally).
+    const map = {
+        'music-vol': Settings.values.musicVol,
+        'sfx-vol':   Settings.values.sfxVol,
+    };
+    Object.entries(map).forEach(([id, v]) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.value = v;
+            const pct = ((+v - el.min) / (el.max - el.min)) * 100;
+            el.style.backgroundSize = pct + '% 100%';
+        }
+    });
+    const numIds = { 'music-vol-num': Settings.values.musicVol, 'sfx-vol-num': Settings.values.sfxVol };
+    Object.entries(numIds).forEach(([id, v]) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = v;
+    });
+    const togs = {
+        'music-on': Settings.values.musicOn,
+        'sfx-on':   Settings.values.sfxOn,
+        'reduce-motion': Settings.values.reduceMotion,
+        'show-fps':      Settings.values.showFPS,
+    };
+    Object.entries(togs).forEach(([id, v]) => {
+        const el = document.getElementById(id);
+        if (el) el.checked = !!v;
+    });
+}
+
 init();
 // Step 4 DOM wiring (defer until after init has cached canvas + listeners)
 wireStep4DOM();
 wireTouchHandlers();
+wireStep5DOM();
 
 })();
