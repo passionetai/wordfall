@@ -53,6 +53,7 @@ const Assets = {
     sparkCyan: null, sparkMagenta: null,
     iconFreeze: null, iconBomb: null, iconShield: null,
     chainLink: null, bossWarning: null, shardNeon: null,
+    shareCardBg: null,
 };
 const ASSET_MANIFEST = {
     logo:         'assets/img/logo-wordmark.png',
@@ -66,6 +67,7 @@ const ASSET_MANIFEST = {
     chainLink:    'assets/vfx/chain-link.png',
     bossWarning:  'assets/img/boss-warning.png',
     shardNeon:    'assets/vfx/shard-neon.png',
+    shareCardBg:  'assets/img/share-card-bg.png',
 };
 const PU_ICON = { freeze: 'iconFreeze', bomb: 'iconBomb', shield: 'iconShield' };
 
@@ -190,13 +192,194 @@ const Audio = (() => {
             setTimeout(() => tone(1976, 0.45, 'triangle', 0.32, 2640), seq.length * 70);
             noise(0.5, 0.18, 2500);
         },
+        achievement() {
+            // Bright triumphant chime for achievement unlocks
+            tone(880, 0.10, 'triangle', 0.26, 1320);
+            setTimeout(() => tone(1320, 0.10, 'triangle', 0.24, 1760), 70);
+            setTimeout(() => tone(1760, 0.18, 'sine',     0.22, 2640), 140);
+            setTimeout(() => tone(2349, 0.30, 'sine',     0.18, 3520), 260);
+        },
     };
 })();
+
+// ---------- PRNG + daily seed ----------
+let DAILY_RNG = null; // function () -> [0, 1); active only in daily mode
+
+function mulberry32(seed) {
+    let s = seed >>> 0;
+    return function () {
+        s = (s + 0x6D2B79F5) >>> 0;
+        let t = s;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+function cyrb53(str, seed = 0) {
+    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0; i < str.length; i++) {
+        const ch = str.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return ((h1 ^ h2) >>> 0);
+}
+function todayKey() {
+    const d = new Date();
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${dd}`;
+}
+function dailySeedToday() { return cyrb53('wordfall-daily-' + todayKey()); }
+
+function rng() {
+    return DAILY_RNG ? DAILY_RNG() : Math.random();
+}
+function rngInt(n) { return (rng() * n) | 0; }
+
+// ---------- Lifetime stats ----------
+const LIFETIME_DEFAULTS = {
+    gamesPlayed: 0,
+    totalWordsDestroyed: 0,
+    totalBossesDefeated: 0,
+    totalBombsDefused: 0,
+    totalDailyCompleted: 0,
+    totalTimePlayedSeconds: 0,
+    bestScoreClassic: 0,
+    bestScoreSprint: 0,
+    bestScoreHardcore: 0,
+    bestScoreDaily: 0,
+    bestWPM: 0,
+    bestCombo: 0,
+};
+function loadLifetime() {
+    try {
+        const raw = localStorage.getItem('wordfall_lifetime_stats');
+        if (!raw) return { ...LIFETIME_DEFAULTS };
+        return Object.assign({ ...LIFETIME_DEFAULTS }, JSON.parse(raw));
+    } catch (e) { return { ...LIFETIME_DEFAULTS }; }
+}
+function saveLifetime(stats) {
+    try { localStorage.setItem('wordfall_lifetime_stats', JSON.stringify(stats)); } catch (e) {}
+}
+
+// ---------- Achievements ----------
+const ACHIEVEMENTS = [
+    { id: 'first_word',  name: 'First Strike',   description: 'Destroy your first word.',         icon: '\u{1F947}' },
+    { id: 'combo_25',    name: 'Combo King',     description: 'Reach 25-combo in a single run.',  icon: '\u{1F525}' },
+    { id: 'score_10k',   name: 'Centurion',      description: 'Score 10,000 in one game.',        icon: '\u{1F4AF}' },
+    { id: 'boss_slayer', name: 'Boss Slayer',    description: 'Defeat your first boss.',          icon: '\u{1F479}' },
+    { id: 'bomb_10',     name: 'Bomb Defuser',   description: 'Type 10 bomb words successfully.', icon: '\u{1F4A3}' },
+    { id: 'daily_7',     name: 'Daily Devotee',  description: 'Complete 7 daily challenges.',     icon: '\u{1F4C5}' },
+    { id: 'wpm_60',      name: 'Speed Demon',    description: 'Hit 60+ WPM in a game.',           icon: '\u{26A1}' },
+    { id: 'words_1000',  name: 'Word Master',    description: 'Destroy 1000 words lifetime.',     icon: '\u{1F3C6}' },
+];
+function loadAchievementsState() {
+    try {
+        const raw = localStorage.getItem('wordfall_achievements');
+        if (!raw) return {};
+        return JSON.parse(raw);
+    } catch (e) { return {}; }
+}
+function saveAchievementsState(map) {
+    try { localStorage.setItem('wordfall_achievements', JSON.stringify(map)); } catch (e) {}
+}
+const _achQueue = [];
+function unlockAchievement(id) {
+    const map = loadAchievementsState();
+    if (map[id] && map[id].unlocked) return false;
+    map[id] = { unlocked: true, unlockedAt: Date.now() };
+    saveAchievementsState(map);
+    const def = ACHIEVEMENTS.find(a => a.id === id);
+    if (def) _achQueue.push(def);
+    pumpAchievementToast();
+    return true;
+}
+let _achToastActive = false;
+function pumpAchievementToast() {
+    if (_achToastActive) return;
+    const next = _achQueue.shift();
+    if (!next) return;
+    _achToastActive = true;
+    const el = document.getElementById('ach-toast');
+    el.innerHTML =
+        `<div class="ach-icon">${next.icon}</div>` +
+        `<div class="ach-text">` +
+        `<div class="ach-meta">Achievement Unlocked</div>` +
+        `<div class="ach-name">${escapeHtml(next.name)}</div>` +
+        `<div class="ach-desc">${escapeHtml(next.description)}</div>` +
+        `</div>`;
+    requestAnimationFrame(() => el.classList.add('show'));
+    Audio.achievement();
+    setTimeout(() => {
+        el.classList.remove('show');
+        setTimeout(() => { _achToastActive = false; pumpAchievementToast(); }, 350);
+    }, 4000);
+}
+
+// ---------- Daily storage ----------
+function dailyKey(dateStr) { return 'wordfall_daily_' + dateStr; }
+function getDailyResult(dateStr = todayKey()) {
+    try {
+        const raw = localStorage.getItem(dailyKey(dateStr));
+        if (!raw) return null;
+        return JSON.parse(raw);
+    } catch (e) { return null; }
+}
+function saveDailyResult(result) {
+    try { localStorage.setItem(dailyKey(result.date), JSON.stringify(result)); } catch (e) {}
+}
+function last7DailyScores() {
+    const out = [];
+    const now = new Date();
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i));
+        const k = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        const r = getDailyResult(k);
+        out.push(r ? r.score : null);
+    }
+    return out;
+}
+function msUntilNextUTCMidnight() {
+    const now = new Date();
+    const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0);
+    return Math.max(0, next - now.getTime());
+}
+function formatHMS(ms) {
+    const s = Math.floor(ms / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(h)}h ${pad(m)}m ${pad(sec)}s`;
+}
+
+// ---------- Touch detection ----------
+const IS_TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+let DEBUG_FORCE_TOUCH = false; // set window.WORDFALL_FORCE_TOUCH = true to enable
+const isTouchActive = () => IS_TOUCH || DEBUG_FORCE_TOUCH || window.WORDFALL_FORCE_TOUCH === true;
 
 // ---------- Game state ----------
 const TOP_HUD_H = 60;
 const BOTTOM_HUD_H = 90;
 const FLOOR_OFFSET_FROM_BOTTOM = 60;
+const TOUCH_KB_H = 168;     // 3 rows × ~50 + gaps
+const TOUCH_PU_H = 88;      // touch power-up row
+
+// Effective offset from the canvas bottom to the "floor" word-crash line.
+// In touch mode we lift the floor above the on-screen keyboard so falling
+// words can't sit underneath the keys.
+function floorOffset() {
+    return FLOOR_OFFSET_FROM_BOTTOM + (isTouchActive() ? TOUCH_KB_H + TOUCH_PU_H : 0);
+}
+function floorY() { return game.h - floorOffset(); }
+function mobileScale() {
+    // Reduce in-game text sizes by 15% when on a touch device.
+    return isTouchActive() ? 0.85 : 1;
+}
 const TWIN_CHAIN_MS = 2000;
 
 const game = {
@@ -234,6 +417,20 @@ const game = {
     bossActive: null,   // ref to the boss word in game.words
     detonateT: 0,       // ms countdown for DETONATED overlay
     bossDefeatedAtLevels: new Set(),
+    // Per-run counters (Step 4)
+    bombsTypedThisRun: 0,
+    bossesDefeatedThisRun: 0,
+    wordsSpawnedThisRun: 0,
+    // Daily mode
+    isDaily: false,
+    dailyLimit: 100,
+    // Touch UI
+    touchKeys: [],         // {ch, x, y, w, h, flashT}
+    touchPowerupRects: [], // {kind, x, y, w, h}
+    pauseBtnRect: null,
+    // Share card cache
+    lastShareDataURL: null,
+    lastShareBlob: null,
 };
 
 // ---------- Persistence ----------
@@ -296,6 +493,7 @@ function resize() {
     game.canvas.style.width  = game.w + 'px';
     game.canvas.style.height = game.h + 'px';
     game.ctx.setTransform(game.dpr, 0, 0, game.dpr, 0, 0);
+    if (game.touchKeys) computeTouchKeyboardRects();
 }
 
 function seedStars() {
@@ -313,6 +511,21 @@ function seedStars() {
 
 // ---------- Game flow ----------
 function startGame() {
+    // Daily mode entry guard — if already played today, surface the daily-played modal.
+    if (game.mode === 'daily') {
+        const existing = getDailyResult();
+        if (existing) {
+            showDailyPlayedModal(existing);
+            return;
+        }
+        // Seed deterministic PRNG for today.
+        DAILY_RNG = mulberry32(dailySeedToday());
+        game.isDaily = true;
+    } else {
+        DAILY_RNG = null;
+        game.isDaily = false;
+    }
+
     game.state = 'playing';
     game.words = []; game.bullets = []; game.particles = []; game.floaters = [];
     game.target = null; game.input = '';
@@ -333,13 +546,18 @@ function startGame() {
     game.bossActive = null;
     game.detonateT = 0;
     game.bossDefeatedAtLevels = new Set();
+    game.bombsTypedThisRun = 0;
+    game.bossesDefeatedThisRun = 0;
+    game.wordsSpawnedThisRun = 0;
+    game.longestWordTyped = '';
 
     if (game.mode === 'hardcore') { game.lives = 1; game.spawnInterval = 1200; }
     else if (game.mode === 'sprint') { game.lives = 3; game.spawnInterval = 1500; }
+    else if (game.mode === 'daily') { game.lives = 5; game.spawnInterval = 1800; }
     else { game.lives = 5; game.spawnInterval = 1800; }
     game.powerups = { freeze: 0, bomb: 0, shield: 0 };
 
-    hide('menu'); hide('gameover');
+    hide('menu'); hide('gameover'); hide('daily-played'); hide('stats-modal');
     Audio.resume();
 }
 
@@ -347,6 +565,7 @@ function toMenu() {
     game.state = 'menu';
     show('menu'); hide('gameover');
     refreshHighUI();
+    if (typeof refreshDailyCard === 'function') refreshDailyCard();
 }
 
 function gameOver(reason) {
@@ -362,14 +581,80 @@ function gameOver(reason) {
     if (game.bestCombo > game.high.combo) game.high.combo = game.bestCombo;
     saveHigh();
 
+    // ---- Lifetime stats (Step 4) ----
+    const lifetime = loadLifetime();
+    lifetime.gamesPlayed += 1;
+    lifetime.totalWordsDestroyed += game.wordsCompleted;
+    lifetime.totalBossesDefeated += game.bossesDefeatedThisRun;
+    lifetime.totalBombsDefused += game.bombsTypedThisRun;
+    lifetime.totalTimePlayedSeconds += Math.floor(game.elapsed / 1000);
+    if (wpm > lifetime.bestWPM) lifetime.bestWPM = wpm;
+    if (game.bestCombo > lifetime.bestCombo) lifetime.bestCombo = game.bestCombo;
+    const modeKey = ({
+        classic: 'bestScoreClassic',
+        sprint:  'bestScoreSprint',
+        hardcore:'bestScoreHardcore',
+        daily:   'bestScoreDaily',
+    })[game.mode];
+    if (modeKey && game.score > (lifetime[modeKey] || 0)) lifetime[modeKey] = game.score;
+
+    // ---- Daily completion record ----
+    if (game.isDaily) {
+        const finished = {
+            score: game.score,
+            wpm,
+            combo: game.bestCombo,
+            completed: true,
+            date: todayKey(),
+            finishedAt: Date.now(),
+            mode: 'daily',
+        };
+        if (!getDailyResult()) {
+            saveDailyResult(finished);
+            lifetime.totalDailyCompleted += 1;
+        }
+    }
+    saveLifetime(lifetime);
+
+    // ---- Achievement evaluation (game-end batch) ----
+    if (game.bestCombo >= 25) unlockAchievement('combo_25');
+    if (game.score >= 10000) unlockAchievement('score_10k');
+    if (wpm >= 60) unlockAchievement('wpm_60');
+    if (lifetime.totalBombsDefused >= 10) unlockAchievement('bomb_10');
+    if (lifetime.totalDailyCompleted >= 7) unlockAchievement('daily_7');
+    if (lifetime.totalWordsDestroyed >= 1000) unlockAchievement('words_1000');
+
     document.getElementById('go-title').textContent = reason || (game.mode === 'sprint' ? "TIME'S UP!" : 'GAME OVER');
     document.getElementById('go-sub').textContent = game.mode === 'sprint'
         ? 'You raced the clock.'
-        : (reason === 'DETONATED' ? 'A bomb word slipped past you.' : 'Words crashed through your defense.');
+        : (reason === 'DETONATED' ? 'A bomb word slipped past you.' :
+           reason === "DAILY COMPLETE" ? 'You finished today’s puzzle.' :
+           'Words crashed through your defense.');
     document.getElementById('go-score').textContent = game.score;
     document.getElementById('go-wpm').textContent = wpm;
     document.getElementById('go-combo').textContent = game.bestCombo;
     document.getElementById('go-new').style.display = isNew ? '' : 'none';
+
+    // Prepare the share card using current run stats.
+    const cardStats = {
+        score: game.score,
+        wpm,
+        longestCombo: game.bestCombo,
+        longestWord: game.longestWordTyped || '—',
+        mode: game.mode,
+        level: game.level,
+        date: new Date(),
+    };
+    try {
+        const url = generateShareCard(cardStats);
+        game.lastShareDataURL = url;
+        // Defer blob creation to share/copy/download time
+        const preview = document.getElementById('share-preview');
+        if (preview) { preview.src = url; preview.classList.add('ready'); }
+    } catch (e) {
+        console.warn('Share card render failed', e);
+    }
+
     setTimeout(() => show('gameover'), 1100);
 }
 
@@ -392,7 +677,7 @@ function pickWord() {
     let candidates = pool.filter(w => !used.has(w[0]) && !same.has(w));
     if (candidates.length === 0) candidates = pool.filter(w => !same.has(w));
     if (candidates.length === 0) candidates = pool;
-    return candidates[(Math.random() * candidates.length) | 0];
+    return candidates[rngInt(candidates.length)];
 }
 
 function pickTwoDistinctWords() {
@@ -402,7 +687,7 @@ function pickTwoDistinctWords() {
     let a = pickWord();
     let b = null;
     for (let i = 0; i < 20 && !b; i++) {
-        const cand = pool[(Math.random() * pool.length) | 0];
+        const cand = pool[rngInt(pool.length)];
         if (cand !== a && !same.has(cand) && cand[0] !== a[0] && !used.has(cand[0])) b = cand;
     }
     if (!b) b = pool.find(w => w !== a && w[0] !== a[0]) || pool[0];
@@ -419,7 +704,7 @@ function pickWordType(level) {
 
     const total = Object.values(weights).reduce((a, b) => a + b, 0);
     if (total <= 0) return 'normal';
-    let r = Math.random() * total;
+    let r = rng() * total;
     for (const k of Object.keys(weights)) {
         r -= weights[k];
         if (r <= 0) return k;
@@ -428,7 +713,7 @@ function pickWordType(level) {
 }
 
 function fontSizeForText(text, scale = 1) {
-    return Math.round(Math.max(18, Math.min(34, 30 - text.length * 0.4)) * 1.3 * scale);
+    return Math.round(Math.max(18, Math.min(34, 30 - text.length * 0.4)) * 1.3 * scale * mobileScale());
 }
 
 function measureWordWidth(text, size) {
@@ -437,7 +722,7 @@ function measureWordWidth(text, size) {
 }
 
 function baseFallSpeed() {
-    const jitter = (Math.random() - 0.5) * 0.012;
+    const jitter = (rng() - 0.5) * 0.012;
     return 0.020 + (game.level - 1) * 0.0045 + jitter;
 }
 
@@ -470,13 +755,12 @@ function spawnTwinPair() {
     const wB = measureWordWidth(b, sizeB);
     const pad = 60;
     // Separate by 200–400 px, both fit in viewport.
-    const sep = 200 + Math.random() * 200;
-    const totalSpan = wA / 2 + sep + wB / 2;
+    const sep = 200 + rng() * 200;
     const leftCenterMin = pad + wA / 2;
     const rightCenterMax = game.w - pad - wB / 2;
     const minLeftX = leftCenterMin;
     const maxLeftX = rightCenterMax - sep;
-    const leftX = Math.max(minLeftX, Math.min(maxLeftX, minLeftX + Math.random() * Math.max(0, maxLeftX - minLeftX)));
+    const leftX = Math.max(minLeftX, Math.min(maxLeftX, minLeftX + rng() * Math.max(0, maxLeftX - minLeftX)));
     const rightX = leftX + sep;
     const twinA = {
         text: a, typed: 0, x: leftX, y: -40, speed, size: sizeA, width: wA,
@@ -492,6 +776,7 @@ function spawnTwinPair() {
     };
     twinA.partner = twinB; twinB.partner = twinA;
     game.words.push(twinA, twinB);
+    game.wordsSpawnedThisRun += 2;
 }
 
 function addWord({ text, type, sizeScale = 1, speedScale = 1, sparkleT }) {
@@ -501,7 +786,7 @@ function addWord({ text, type, sizeScale = 1, speedScale = 1, sparkleT }) {
     const speed = baseFallSpeed() * speedScale;
     const w = {
         text, typed: 0,
-        x: pad + width / 2 + Math.random() * (game.w - width - pad * 2),
+        x: pad + width / 2 + rng() * (game.w - width - pad * 2),
         y: -40,
         speed, size, width,
         hue: 180 + Math.random() * 180,
@@ -511,6 +796,7 @@ function addWord({ text, type, sizeScale = 1, speedScale = 1, sparkleT }) {
     };
     if (type === 'bonus') w.sparkleT = sparkleT || 0;
     game.words.push(w);
+    game.wordsSpawnedThisRun += 1;
 }
 
 function spawnByType(t) {
@@ -537,7 +823,7 @@ function startBossWarning() {
 function spawnBoss() {
     // Clear all non-boss words for a clean fight.
     game.words = game.words.filter(w => w.type === 'boss');
-    const text = BOSS_WORDS[(Math.random() * BOSS_WORDS.length) | 0];
+    const text = BOSS_WORDS[rngInt(BOSS_WORDS.length)];
     const sizeBase = fontSizeForText(text); // VT323 sized for length already
     const size = Math.round(sizeBase * 2.5);
     game.ctx.font = `400 ${size}px 'VT323', monospace`;
@@ -580,10 +866,12 @@ function bossDefeated(boss) {
     // Grant 2 random power-ups.
     for (let i = 0; i < 2; i++) {
         const kinds = ['freeze', 'bomb', 'shield'];
-        const pick = kinds[(Math.random() * kinds.length) | 0];
+        const pick = kinds[rngInt(kinds.length)];
         game.powerups[pick]++;
     }
     game.bossDefeatedAtLevels.add(game.level);
+    game.bossesDefeatedThisRun++;
+    unlockAchievement('boss_slayer');
     game.bossState = 'none';
     game.bossActive = null;
     game.target = null; game.input = ''; renderInput();
@@ -756,6 +1044,13 @@ function completeWord(w) {
     game.comboTimer = 3200;
     game.fireT = 100;
 
+    // Per-run trackers (Step 4)
+    if (w.type === 'bomb') game.bombsTypedThisRun++;
+    if (w.text && w.text.length > (game.longestWordTyped || '').length) game.longestWordTyped = w.text;
+    if (game.wordsCompleted === 1) unlockAchievement('first_word');
+    if (game.bestCombo >= 25) unlockAchievement('combo_25');
+    if (game.score >= 10000) unlockAchievement('score_10k');
+
     // Per-type audio + FX
     if (w.type === 'boss') {
         // Boss letters score is per-keystroke; final completion triggers defeat.
@@ -864,7 +1159,7 @@ function missWord(w) {
         // Instant game over regardless of lives.
         game.words = game.words.filter(x => x !== w);
         if (game.target === w) { game.target = null; game.input = ''; renderInput(); }
-        explodeAt(w.x, game.h - FLOOR_OFFSET_FROM_BOTTOM, true, 90, 'redmagenta');
+        explodeAt(w.x, floorY(), true, 90, 'redmagenta');
         detonationGameOver();
         return;
     }
@@ -1138,13 +1433,19 @@ function update(dt) {
     game.spawnCooldown -= dt;
     const maxOnScreen = 4 + Math.min(6, Math.floor(game.level / 2));
     const bossActive = game.bossState === 'fighting';
-    if (!bossActive && game.spawnCooldown <= 0 && game.words.length < maxOnScreen) {
+    const dailyCapReached = game.isDaily && game.wordsSpawnedThisRun >= game.dailyLimit;
+    if (!bossActive && !dailyCapReached && game.spawnCooldown <= 0 && game.words.length < maxOnScreen) {
         const t = pickWordType(game.level);
         spawnByType(t);
-        game.spawnCooldown = game.spawnInterval * (0.7 + Math.random() * 0.6);
+        game.spawnCooldown = game.spawnInterval * (0.7 + rng() * 0.6);
+    }
+    // Daily-mode end: once 100 spawned AND the field is clear, finish the run.
+    if (game.isDaily && dailyCapReached && game.words.length === 0 && !bossActive && game.bossState !== 'warning') {
+        gameOver('DAILY COMPLETE');
+        return;
     }
 
-    const floor = game.h - FLOOR_OFFSET_FROM_BOTTOM;
+    const floor = floorY();
     for (const w of game.words) {
         // Twin partner freeze, twin chain timer
         if (w.type === 'twin' && w.chainTimer > 0) {
@@ -1312,6 +1613,9 @@ function draw(dt) {
     drawTopHud(ctx, w, h);
 
     if (game.mode === 'sprint' && game.state === 'playing') drawSprintTimer(ctx, w);
+
+    // Step 4: touch overlays
+    drawStep4Overlays(ctx);
 
     ctx.restore();
 }
@@ -1489,7 +1793,7 @@ function drawWords(ctx) {
         const x = w.x + xOff;
         const y = w.y;
         const isTarget = (w === game.target);
-        const proximity = Math.min(1, w.y / (game.h - FLOOR_OFFSET_FROM_BOTTOM));
+        const proximity = Math.min(1, w.y / floorY());
         const inDanger = (w.y / game.h) > 0.8;
 
         ctx.save();
@@ -2070,7 +2374,683 @@ function withAlpha(hex, a) {
 }
 function show(id) { document.getElementById(id).classList.add('show'); }
 function hide(id) { document.getElementById(id).classList.remove('show'); }
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+}
+
+// ====================================================================
+// Step 4 — Share cards
+// ====================================================================
+const SHARE_URL = 'passionetai.github.io/wordfall';
+
+function formatShareDate(d) {
+    const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+    return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+}
+
+function generateShareCard(stats) {
+    const W = 1200, H = 630;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+
+    // Background
+    if (Assets.shareCardBg) {
+        ctx.drawImage(Assets.shareCardBg, 0, 0, W, H);
+        // Dim overlay so text stays legible regardless of art brightness.
+        ctx.fillStyle = 'rgba(10, 14, 26, 0.55)';
+        ctx.fillRect(0, 0, W, H);
+    } else {
+        const grad = ctx.createLinearGradient(0, 0, 0, H);
+        grad.addColorStop(0, '#0A0E1A');
+        grad.addColorStop(1, '#1A1B3A');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+        // Faint neon decorative strokes
+        ctx.save();
+        ctx.lineWidth = 2;
+        for (let i = 0; i < 5; i++) {
+            ctx.strokeStyle = i % 2 ? 'rgba(255, 46, 151, 0.18)' : 'rgba(0, 240, 255, 0.16)';
+            const y = 80 + i * 110 + (i * 13);
+            ctx.beginPath();
+            ctx.moveTo(40, y);
+            ctx.bezierCurveTo(W * 0.35, y - 40, W * 0.65, y + 60, W - 40, y - 10);
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+
+    // Logo (top-left)
+    const LOGO_PAD = 40;
+    if (Assets.logo) {
+        const lw = 200;
+        const aspect = Assets.logo.height / Assets.logo.width;
+        ctx.drawImage(Assets.logo, LOGO_PAD, LOGO_PAD, lw, lw * aspect);
+    } else {
+        ctx.font = "400 56px 'Monoton', Impact, sans-serif";
+        ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+        ctx.fillStyle = '#00F0FF';
+        ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 18;
+        ctx.fillText('WORD', LOGO_PAD, LOGO_PAD);
+        ctx.fillStyle = '#FF2E97';
+        ctx.shadowColor = '#FF2E97';
+        ctx.fillText('FALL', LOGO_PAD + 170, LOGO_PAD);
+        ctx.shadowBlur = 0;
+    }
+
+    // Mode badge (top-right)
+    const modeLabel = stats.mode === 'daily' ? 'DAILY CHALLENGE' : String(stats.mode || 'CLASSIC').toUpperCase();
+    ctx.font = "700 18px Inter, sans-serif";
+    const badgePadX = 16;
+    const badgeH = 30;
+    const bw = ctx.measureText(modeLabel).width + badgePadX * 2;
+    const bx = W - LOGO_PAD - bw;
+    const by = LOGO_PAD + 4;
+    ctx.fillStyle = 'rgba(255, 46, 151, 0.2)';
+    ctx.strokeStyle = '#FF2E97';
+    ctx.lineWidth = 1;
+    roundRectInto(ctx, bx, by, bw, badgeH, 999);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#FF2E97';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(modeLabel, bx + bw / 2, by + badgeH / 2 + 1);
+
+    // FINAL SCORE label
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = "400 24px VT323, monospace";
+    ctx.fillStyle = '#F0F4FF';
+    ctx.fillText('FINAL SCORE', W / 2, 235);
+
+    // Big score number with magenta drop-shadow
+    const scoreStr = String(stats.score);
+    ctx.font = "400 140px 'Monoton', Impact, sans-serif";
+    // shadow pass
+    ctx.fillStyle = '#FF2E97';
+    ctx.fillText(scoreStr, W / 2 + 4, 360 + 4);
+    // main pass
+    ctx.fillStyle = '#00F0FF';
+    ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 0;
+    ctx.fillText(scoreStr, W / 2, 360);
+
+    // Three stat plates
+    const plates = [
+        { label: 'WPM',           value: String(stats.wpm),          big: true  },
+        { label: 'MAX COMBO',     value: String(stats.longestCombo), big: true  },
+        { label: 'LONGEST WORD',  value: String(stats.longestWord || '—').toUpperCase(), big: false },
+    ];
+    const plateW = 240, plateH = 120, gap = 24;
+    const platesTotalW = 3 * plateW + 2 * gap;
+    const pStartX = (W - platesTotalW) / 2;
+    const pY = 420;
+    plates.forEach((p, i) => {
+        const px = pStartX + i * (plateW + gap);
+        ctx.save();
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.5)';
+        ctx.lineWidth = 1;
+        roundRectInto(ctx, px, pY, plateW, plateH, 12);
+        ctx.fill(); ctx.stroke();
+        // label
+        ctx.font = "400 18px VT323, monospace";
+        ctx.fillStyle = '#6B7299';
+        ctx.textAlign = 'center';
+        ctx.fillText(p.label, px + plateW / 2, pY + 30);
+        // value
+        ctx.fillStyle = '#00F0FF';
+        if (p.big) {
+            ctx.font = "400 48px 'Monoton', Impact, sans-serif";
+            ctx.fillText(p.value, px + plateW / 2, pY + 86);
+        } else {
+            ctx.font = "400 36px 'Monoton', Impact, sans-serif";
+            const val = fitText(ctx, p.value, plateW - 20);
+            ctx.fillText(val, px + plateW / 2, pY + 86);
+        }
+        ctx.restore();
+    });
+
+    // Decorative dots
+    for (let i = 0; i < 11; i++) {
+        const dx = 40 + Math.floor(Math.random() * (W - 80));
+        const dy = 560 + Math.floor(Math.random() * 50);
+        ctx.globalAlpha = 0.3 + Math.random() * 0.3;
+        ctx.fillStyle = i % 2 ? '#FF2E97' : '#00F0FF';
+        ctx.shadowColor = ctx.fillStyle;
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(dx, dy, 3 + Math.random() * 3, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+
+    // Site URL (bottom-left), Date (bottom-right)
+    ctx.font = "400 16px Inter, sans-serif";
+    ctx.fillStyle = '#6B7299';
+    ctx.textAlign = 'left';  ctx.textBaseline = 'alphabetic';
+    ctx.fillText(SHARE_URL, LOGO_PAD, H - LOGO_PAD);
+    ctx.textAlign = 'right';
+    ctx.fillText(formatShareDate(stats.date || new Date()), W - LOGO_PAD, H - LOGO_PAD);
+
+    return c.toDataURL('image/png');
+}
+
+function fitText(ctx, str, maxW) {
+    if (ctx.measureText(str).width <= maxW) return str;
+    let s = str;
+    while (s.length > 1 && ctx.measureText(s + '…').width > maxW) s = s.slice(0, -1);
+    return s + '…';
+}
+
+function roundRectInto(ctx, x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+}
+
+// Convert a data URL to a Blob (no fetch, more reliable for offline pages)
+function dataURLToBlob(dataURL) {
+    const [meta, b64] = dataURL.split(',');
+    const mime = (meta.match(/data:(.*?);base64/) || [])[1] || 'image/png';
+    const bin = atob(b64);
+    const len = bin.length;
+    const buf = new Uint8Array(len);
+    for (let i = 0; i < len; i++) buf[i] = bin.charCodeAt(i);
+    return new Blob([buf], { type: mime });
+}
+
+function shareToast(msg) {
+    const el = document.getElementById('share-toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(shareToast._t);
+    shareToast._t = setTimeout(() => el.classList.remove('show'), 2000);
+}
+
+async function handleShare() {
+    const dataURL = game.lastShareDataURL;
+    if (!dataURL) { shareToast('Nothing to share yet'); return; }
+    const blob = dataURLToBlob(dataURL);
+    const filename = `wordfall-${game.mode || 'classic'}-${game.score}.png`;
+    const text = game.isDaily
+        ? `I scored ${game.score} on today's Word Fall Daily Challenge! \u{1F3AF} Try today's puzzle: ${SHARE_URL}`
+        : `I scored ${game.score} on Word Fall! \u{1F3AE} Can you beat it? ${SHARE_URL}`;
+
+    // 1) navigator.share with file
+    try {
+        if (navigator.canShare && navigator.share) {
+            const file = new File([blob], filename, { type: 'image/png' });
+            if (navigator.canShare({ files: [file] })) {
+                await navigator.share({ files: [file], text, title: 'Word Fall' });
+                return;
+            }
+        }
+    } catch (e) { /* fall through */ }
+
+    // 2) Clipboard image
+    try {
+        if (navigator.clipboard && window.ClipboardItem) {
+            await navigator.clipboard.write([
+                new ClipboardItem({ 'image/png': blob }),
+            ]);
+            shareToast('Copied to clipboard!');
+            return;
+        }
+    } catch (e) { /* fall through */ }
+
+    // 3) Download
+    triggerDownload(dataURL, filename);
+    shareToast('Downloaded image');
+}
+
+function triggerDownload(dataURL, filename) {
+    const a = document.createElement('a');
+    a.href = dataURL;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+async function handleCopyScore() {
+    const text = game.isDaily
+        ? `I scored ${game.score} on today's Word Fall Daily Challenge! \u{1F3AF} Try today's puzzle: ${SHARE_URL}`
+        : `I scored ${game.score} on Word Fall! \u{1F3AE} Can you beat it? ${SHARE_URL}`;
+    try {
+        await navigator.clipboard.writeText(text);
+        shareToast('Copied!');
+    } catch (e) {
+        shareToast('Copy failed');
+    }
+}
+
+function handleDownload() {
+    if (!game.lastShareDataURL) return;
+    triggerDownload(game.lastShareDataURL, `wordfall-${game.mode || 'classic'}-${game.score}.png`);
+    shareToast('Downloaded image');
+}
+
+// ====================================================================
+// Step 4 — Daily card / Daily-played modal / Stats modal
+// ====================================================================
+function refreshDailyCard() {
+    const dateEl = document.getElementById('daily-date');
+    const stateEl = document.getElementById('daily-state');
+    const cdEl = document.getElementById('daily-countdown');
+    const sparkCv = document.getElementById('daily-spark');
+    if (!dateEl) return;
+    dateEl.textContent = todayKey();
+    const r = getDailyResult();
+    if (r) {
+        stateEl.textContent = `✓ Played · ${r.score}`;
+        cdEl.textContent = `Next in ${formatHMS(msUntilNextUTCMidnight())}`;
+    } else {
+        stateEl.textContent = '';
+        cdEl.textContent = '';
+    }
+    drawDailySparkline(sparkCv);
+}
+function drawDailySparkline(canvasEl) {
+    if (!canvasEl) return;
+    const scores = last7DailyScores();
+    if (!scores.some(s => s != null)) {
+        canvasEl.classList.remove('has-data');
+        return;
+    }
+    canvasEl.classList.add('has-data');
+    const ctx = canvasEl.getContext('2d');
+    const w = canvasEl.width, h = canvasEl.height;
+    ctx.clearRect(0, 0, w, h);
+    const values = scores.map(s => s == null ? 0 : s);
+    const max = Math.max(...values, 1);
+    const stepX = w / (values.length - 1);
+    ctx.strokeStyle = '#00F0FF';
+    ctx.lineWidth = 1.5;
+    ctx.shadowColor = '#00F0FF';
+    ctx.shadowBlur = 4;
+    ctx.beginPath();
+    for (let i = 0; i < values.length; i++) {
+        const x = i * stepX;
+        const y = h - 2 - (values[i] / max) * (h - 4);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+}
+
+let dailyCountdownTimer = null;
+function startDailyCountdownTick() {
+    stopDailyCountdownTick();
+    dailyCountdownTimer = setInterval(() => {
+        const cdEl = document.getElementById('daily-countdown');
+        const r = getDailyResult();
+        if (r && cdEl) cdEl.textContent = `Next in ${formatHMS(msUntilNextUTCMidnight())}`;
+        const modalCd = document.getElementById('dp-countdown');
+        if (modalCd) modalCd.textContent = formatHMS(msUntilNextUTCMidnight());
+    }, 1000);
+}
+function stopDailyCountdownTick() {
+    if (dailyCountdownTimer) clearInterval(dailyCountdownTimer);
+    dailyCountdownTimer = null;
+}
+
+function showDailyPlayedModal(result) {
+    document.getElementById('dp-score').textContent = result.score;
+    document.getElementById('dp-wpm').textContent   = result.wpm   || 0;
+    document.getElementById('dp-combo').textContent = result.combo || 0;
+    document.getElementById('dp-countdown').textContent = formatHMS(msUntilNextUTCMidnight());
+    show('daily-played');
+}
+
+function populateStatsModal() {
+    const lifetime = loadLifetime();
+    const ach = loadAchievementsState();
+    const list = document.getElementById('lifetime-stats');
+    const rows = [
+        ['Games played',          lifetime.gamesPlayed],
+        ['Words destroyed',       lifetime.totalWordsDestroyed],
+        ['Bosses defeated',       lifetime.totalBossesDefeated],
+        ['Bombs defused',         lifetime.totalBombsDefused],
+        ['Daily completions',     lifetime.totalDailyCompleted],
+        ['Time played',           formatPlaytime(lifetime.totalTimePlayedSeconds)],
+        ['Best WPM',              lifetime.bestWPM],
+        ['Best combo',            lifetime.bestCombo],
+        ['Best — Classic',        lifetime.bestScoreClassic],
+        ['Best — Sprint',         lifetime.bestScoreSprint],
+        ['Best — Hardcore',       lifetime.bestScoreHardcore],
+        ['Best — Daily',          lifetime.bestScoreDaily],
+    ];
+    list.innerHTML = rows.map(([k, v]) =>
+        `<div class="row"><span class="k">${escapeHtml(k)}</span><span class="v">${escapeHtml(v)}</span></div>`
+    ).join('');
+    const grid = document.getElementById('ach-grid');
+    grid.innerHTML = ACHIEVEMENTS.map(a => {
+        const unlocked = !!(ach[a.id] && ach[a.id].unlocked);
+        return `<div class="ach-cell ${unlocked ? 'unlocked' : 'locked'}" title="${escapeHtml(a.description)}">` +
+               `<div class="icon">${a.icon}</div>` +
+               `<div class="name">${escapeHtml(a.name)}</div>` +
+               `</div>`;
+    }).join('');
+}
+
+function formatPlaytime(seconds) {
+    if (!seconds) return '0s';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h) return `${h}h ${m}m`;
+    return `${m}m ${seconds % 60}s`;
+}
+
+// ====================================================================
+// Step 4 — Touch UI (keyboard, power-ups, pause button, tap-to-lock)
+// ====================================================================
+const KB_ROWS = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+
+function computeTouchKeyboardRects() {
+    game.touchKeys.length = 0;
+    if (!isTouchActive()) return;
+    const w = game.w, h = game.h;
+    const kbTop = h - BOTTOM_HUD_H - TOUCH_KB_H;
+    const rowH = 50;
+    const rowGap = 6;
+    const sidePad = 8;
+    KB_ROWS.forEach((row, ri) => {
+        const isLast = ri === KB_ROWS.length - 1;
+        const cells = isLast ? row.length + 1 : row.length; // backspace key on last row
+        const usable = w - sidePad * 2;
+        const keyW = Math.floor((usable - (cells - 1) * 4) / cells);
+        const startX = sidePad + (usable - (keyW * cells + (cells - 1) * 4)) / 2;
+        const y = kbTop + ri * (rowH + rowGap);
+        for (let i = 0; i < row.length; i++) {
+            game.touchKeys.push({
+                ch: row[i],
+                x: startX + i * (keyW + 4),
+                y, w: keyW, h: rowH,
+                flashT: 0,
+            });
+        }
+        if (isLast) {
+            game.touchKeys.push({
+                ch: 'BACKSPACE',
+                x: startX + row.length * (keyW + 4),
+                y, w: keyW, h: rowH,
+                flashT: 0,
+            });
+        }
+    });
+}
+
+function drawTouchKeyboard(ctx) {
+    if (!isTouchActive()) return;
+    if (!game.touchKeys.length) computeTouchKeyboardRects();
+    for (const k of game.touchKeys) {
+        const press = k.flashT > 0;
+        const sc = press ? 0.95 : 1;
+        const dx = k.x + (1 - sc) * k.w / 2;
+        const dy = k.y + (1 - sc) * k.h / 2;
+        const dw = k.w * sc, dh = k.h * sc;
+        ctx.save();
+        ctx.fillStyle = press ? 'rgba(0, 240, 255, 0.3)' : 'rgba(0, 0, 0, 0.6)';
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.4)';
+        ctx.lineWidth = 1;
+        roundRectInto(ctx, dx, dy, dw, dh, 6);
+        ctx.fill(); ctx.stroke();
+        ctx.font = '400 22px VT323, monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#F0F4FF';
+        ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 6;
+        if (k.ch === 'BACKSPACE') {
+            ctx.fillText('⌫', dx + dw / 2, dy + dh / 2 + 1);
+        } else {
+            ctx.fillText(k.ch.toUpperCase(), dx + dw / 2, dy + dh / 2 + 1);
+        }
+        ctx.shadowBlur = 0;
+        ctx.restore();
+        if (k.flashT > 0) k.flashT = Math.max(0, k.flashT - 16);
+    }
+}
+
+function drawTouchPowerups(ctx) {
+    if (!isTouchActive()) return;
+    const w = game.w, h = game.h;
+    const baseY = h - BOTTOM_HUD_H - TOUCH_KB_H - TOUCH_PU_H + 12;
+    const size = 64, gap = 18;
+    const slots = ['freeze', 'bomb', 'shield'];
+    const totalW = slots.length * size + (slots.length - 1) * gap;
+    const startX = (w - totalW) / 2;
+    game.touchPowerupRects.length = 0;
+    const t = performance.now();
+    for (let i = 0; i < slots.length; i++) {
+        const kind = slots[i];
+        const has = game.powerups[kind] > 0;
+        const x = startX + i * (size + gap);
+        const y = baseY;
+        // Halo
+        if (has) {
+            const r = size / 2 + 8 + 2 * Math.sin(t * 0.005);
+            ctx.beginPath();
+            ctx.arc(x + size / 2, y + size / 2, r, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0, 240, 255, 0.18)';
+            ctx.fill();
+        }
+        // Circle
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x + size / 2, y + size / 2, size / 2, 0, Math.PI * 2);
+        ctx.fillStyle = has ? 'rgba(0, 0, 0, 0.65)' : 'rgba(0, 0, 0, 0.45)';
+        ctx.fill();
+        ctx.strokeStyle = has ? '#00F0FF' : 'rgba(0, 240, 255, 0.3)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.restore();
+        // Icon
+        const asset = Assets[PU_ICON[kind]];
+        if (asset) {
+            ctx.globalAlpha = has ? 1 : 0.3;
+            const iSz = 40;
+            ctx.drawImage(asset, x + (size - iSz) / 2, y + (size - iSz) / 2, iSz, iSz);
+            ctx.globalAlpha = 1;
+        } else {
+            ctx.font = "400 28px 'Monoton', Impact, sans-serif";
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillStyle = has ? '#00F0FF' : 'rgba(240, 244, 255, 0.3)';
+            const letter = ({ freeze: 'F', bomb: 'B', shield: 'S' })[kind];
+            ctx.fillText(letter, x + size / 2, y + size / 2);
+        }
+        // Count badge
+        if (game.powerups[kind] > 1) {
+            ctx.font = "700 14px Inter, sans-serif";
+            ctx.fillStyle = '#FFD93D';
+            ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+            ctx.fillText('×' + game.powerups[kind], x + size - 4, y + 2);
+        }
+        game.touchPowerupRects.push({ kind, x, y, w: size, h: size });
+    }
+}
+
+function drawTouchPauseButton(ctx) {
+    if (!isTouchActive()) return;
+    const size = 48;
+    const margin = 12;
+    const x = game.w - size - margin;
+    const y = margin;
+    game.pauseBtnRect = { x, y, w: size, h: size };
+    ctx.save();
+    ctx.fillStyle = 'rgba(10, 14, 26, 0.7)';
+    ctx.strokeStyle = '#00F0FF';
+    ctx.lineWidth = 1.5;
+    roundRectInto(ctx, x, y, size, size, 8);
+    ctx.fill(); ctx.stroke();
+    ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 8;
+    ctx.fillStyle = '#00F0FF';
+    ctx.fillRect(x + 14, y + 12, 6, size - 24);
+    ctx.fillRect(x + 28, y + 12, 6, size - 24);
+    ctx.restore();
+}
+
+function hitTestTouchKeyboard(x, y) {
+    for (const k of game.touchKeys) {
+        if (x >= k.x && x <= k.x + k.w && y >= k.y && y <= k.y + k.h) return k;
+    }
+    return null;
+}
+function hitTestTouchPU(x, y) {
+    for (const r of game.touchPowerupRects) {
+        if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r;
+    }
+    return null;
+}
+function hitTestPauseBtn(x, y) {
+    const r = game.pauseBtnRect;
+    if (!r) return false;
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+}
+function hitTestWord(x, y) {
+    // Pick the visually closest lockable word to the tap.
+    let best = null, bestDist = Infinity;
+    for (const w of game.words) {
+        if (w.type === 'decoy' || w.type === 'boss' || w.completed) continue;
+        const dx = x - w.x, dy = y - w.y;
+        const d = Math.hypot(dx, dy);
+        if (d < bestDist && d < 60 + w.width / 2) {
+            best = w; bestDist = d;
+        }
+    }
+    return best;
+}
+
+function simulateKeyPress(ch) {
+    onKey({ key: ch, preventDefault() {} });
+}
+
+// ====================================================================
+// Step 4 — Wire UI events for share, modals, mode, touch
+// ====================================================================
+function wireStep4DOM() {
+    // Mode buttons already wired in init(); just refresh card and intercept
+    // Daily taps when today is already locked in.
+    document.querySelectorAll('#mode-select .mode').forEach(el => {
+        el.addEventListener('click', () => {
+            if (el.dataset.mode === 'daily') {
+                refreshDailyCard();
+                const r = getDailyResult();
+                if (r) showDailyPlayedModal(r);
+            }
+        });
+    });
+    // Stats link
+    document.getElementById('stats-link').addEventListener('click', () => {
+        populateStatsModal();
+        show('stats-modal');
+    });
+    document.getElementById('stats-close').addEventListener('click', () => hide('stats-modal'));
+    // Daily-played modal
+    document.getElementById('dp-close-btn').addEventListener('click', () => hide('daily-played'));
+    document.getElementById('dp-share-btn').addEventListener('click', () => {
+        const r = getDailyResult();
+        if (!r) return;
+        // Build a share card from the saved daily result
+        const cardStats = {
+            score: r.score, wpm: r.wpm, longestCombo: r.combo,
+            longestWord: '—', mode: 'daily', level: 0,
+            date: new Date(),
+        };
+        try {
+            const url = generateShareCard(cardStats);
+            game.lastShareDataURL = url;
+            game.score = r.score; game.isDaily = true; game.mode = 'daily';
+            handleShare();
+        } catch (e) { console.warn(e); }
+    });
+    // Share buttons on game-over
+    document.getElementById('share-btn').addEventListener('click', handleShare);
+    document.getElementById('copy-btn').addEventListener('click', handleCopyScore);
+    document.getElementById('download-btn').addEventListener('click', handleDownload);
+    // Initial daily card population
+    refreshDailyCard();
+    startDailyCountdownTick();
+}
+
+// Wire touch input events on canvas (in addition to existing click handler).
+function wireTouchHandlers() {
+    const cv = game.canvas;
+    cv.addEventListener('pointerdown', (e) => {
+        const rect = cv.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        // Touch pause toggle (works in both playing and paused states)
+        if (isTouchActive() && hitTestPauseBtn(x, y)) {
+            if (game.state === 'playing') {
+                game.state = 'paused';
+                document.getElementById('pause-hint').style.display = 'block';
+            } else if (game.state === 'paused') {
+                game.state = 'playing';
+                document.getElementById('pause-hint').style.display = 'none';
+                game.last = performance.now();
+            }
+            e.preventDefault();
+            return;
+        }
+        if (game.state !== 'playing') return;
+        // Touch power-ups
+        const pu = hitTestTouchPU(x, y);
+        if (pu) {
+            usePowerup(pu.kind);
+            e.preventDefault();
+            return;
+        }
+        // Keyboard keys
+        const key = hitTestTouchKeyboard(x, y);
+        if (key) {
+            key.flashT = 80;
+            simulateKeyPress(key.ch === 'BACKSPACE' ? 'Backspace' : key.ch);
+            e.preventDefault();
+            return;
+        }
+        // Tap-to-lock on a word (touch mode only)
+        if (isTouchActive()) {
+            const w = hitTestWord(x, y);
+            if (w) {
+                if (game.target && game.target !== w) {
+                    game.target = null; game.input = ''; renderInput();
+                }
+                if (!game.target) {
+                    // Simulate locking on first letter
+                    simulateKeyPress(w.text[0]);
+                }
+                e.preventDefault();
+                return;
+            }
+            // Tap empty space cancels lock
+            if (game.target) {
+                game.target = null; game.input = ''; renderInput();
+            }
+        }
+    });
+}
+
+// Hook canvas-drawn UI into the main draw pipeline (called from draw()).
+function drawStep4Overlays(ctx) {
+    drawTouchPowerups(ctx);
+    drawTouchKeyboard(ctx);
+    drawTouchPauseButton(ctx);
+}
 
 init();
+// Step 4 DOM wiring (defer until after init has cached canvas + listeners)
+wireStep4DOM();
+wireTouchHandlers();
 
 })();

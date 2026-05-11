@@ -255,10 +255,13 @@
         }
         .modes {
             display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: clamp(8px, 1.5vw, 16px);
             margin: clamp(8px, 1.5vh, 14px) 0 clamp(8px, 1.5vh, 18px);
             width: 100%;
+        }
+        @media (max-width: 720px) {
+            .modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
         .mode {
             padding: clamp(10px, 2vw, 20px) clamp(8px, 1.2vw, 16px);
@@ -359,6 +362,258 @@
             opacity: 0;
             text-shadow: 0 0 24px currentColor;
         }
+
+        /* ---------- Step 4: Daily card / Stats / Share / Toasts ---------- */
+        .mode.daily {
+            border-color: rgba(255, 46, 151, 0.55);
+            background: rgba(255, 46, 151, 0.06);
+            position: relative;
+        }
+        .mode.daily.selected {
+            border-color: var(--neon-magenta);
+            background: rgba(255, 46, 151, 0.12);
+            box-shadow: 0 0 12px rgba(255, 46, 151, 0.35);
+        }
+        .mode.daily .cal {
+            font-size: 22px; line-height: 1; margin-bottom: 4px;
+        }
+        .mode.daily .desc { color: #b9b9d8; }
+        .daily-state {
+            margin-top: 6px;
+            font-size: clamp(0.6rem, 0.9vw, 0.7rem);
+            color: var(--neon-magenta);
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+        #daily-spark {
+            margin-top: 6px;
+            display: none;
+            width: 60px; height: 20px;
+        }
+        #daily-spark.has-data { display: inline-block; }
+        .daily-countdown {
+            font-family: var(--font-game);
+            font-size: 14px;
+            color: var(--text-bright);
+            margin-top: 4px;
+            min-height: 16px;
+        }
+
+        .link-btn {
+            display: block;
+            margin: 8px auto 0;
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            font-family: var(--font-ui);
+            font-size: clamp(0.75rem, 1.1vw, 0.875rem);
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            padding: 8px 12px;
+            transition: color 0.15s;
+        }
+        .link-btn:hover { color: var(--neon-cyan); }
+
+        .btn.small {
+            padding: clamp(8px, 1.2vw, 12px) clamp(16px, 2.5vw, 28px);
+            font-size: clamp(0.85rem, 2vw, 1.1rem);
+            letter-spacing: 2px;
+        }
+        .btn-row { display: flex; flex-wrap: wrap; justify-content: center; }
+        .share-row {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+            margin: 8px 0 16px;
+        }
+        #share-preview {
+            display: none;
+            width: 100%;
+            max-width: min(360px, 80vw);
+            height: auto;
+            margin: 6px auto 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(0, 240, 255, 0.35);
+            box-shadow: 0 6px 24px rgba(0, 240, 255, 0.18);
+        }
+        #share-preview.ready { display: block; }
+
+        .next-daily {
+            font-family: var(--font-game);
+            font-size: clamp(1rem, 1.6vw, 1.25rem);
+            color: var(--neon-cyan);
+            letter-spacing: 2px;
+            margin: 10px 0 14px;
+        }
+        .next-daily span {
+            font-family: var(--font-display);
+            color: var(--neon-magenta);
+            font-size: clamp(1.1rem, 2vw, 1.5rem);
+            text-shadow: 0 0 12px var(--neon-magenta);
+        }
+
+        .stats-panel { max-width: min(640px, 94vw); }
+        .stats-panel h2 { margin-bottom: 10px; }
+        .stats-panel .section-h {
+            font-family: var(--font-display);
+            font-size: clamp(1rem, 2vw, 1.25rem);
+            color: var(--neon-cyan);
+            letter-spacing: 3px;
+            margin: 18px 0 10px;
+            text-shadow: 0 0 8px var(--neon-cyan);
+        }
+        .lifetime-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px 18px;
+            margin: 4px 0;
+            text-align: left;
+        }
+        .lifetime-stats .row {
+            display: flex; justify-content: space-between;
+            padding: 6px 10px;
+            font-size: clamp(0.75rem, 1.1vw, 0.9rem);
+            border-radius: 4px;
+        }
+        .lifetime-stats .row:nth-child(odd) { background: rgba(255, 255, 255, 0.03); }
+        .lifetime-stats .row .k { color: var(--text-dim); letter-spacing: 1px; text-transform: uppercase; font-size: 0.85em; }
+        .lifetime-stats .row .v { color: var(--text-bright); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+        .ach-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: clamp(6px, 1.5vw, 12px);
+            margin-top: 6px;
+        }
+        .ach-cell {
+            position: relative;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: clamp(8px, 1.5vw, 14px) 6px;
+            text-align: center;
+            min-width: 0;
+        }
+        .ach-cell .icon {
+            font-size: clamp(22px, 3vw, 30px);
+            line-height: 1.1;
+        }
+        .ach-cell .name {
+            font-size: clamp(0.65rem, 1vw, 0.8rem);
+            font-weight: 700;
+            letter-spacing: 1px;
+            margin-top: 4px;
+        }
+        .ach-cell.locked {
+            filter: grayscale(1);
+            opacity: 0.4;
+        }
+        .ach-cell.locked::after {
+            content: "\01F512";
+            position: absolute;
+            top: 4px; right: 6px;
+            font-size: 11px;
+            opacity: 0.7;
+        }
+        .ach-cell.unlocked {
+            border-color: rgba(0, 240, 255, 0.4);
+            background: rgba(0, 240, 255, 0.06);
+            box-shadow: 0 0 12px rgba(0, 240, 255, 0.12);
+        }
+
+        .close-x {
+            position: absolute; top: 10px; right: 14px;
+            background: transparent; border: none;
+            color: var(--text-dim);
+            font-size: 28px; line-height: 1;
+            cursor: pointer;
+            padding: 4px 8px;
+        }
+        .close-x:hover { color: var(--neon-cyan); }
+
+        #share-toast {
+            position: fixed;
+            bottom: 24px; left: 50%; transform: translate(-50%, 60px);
+            background: rgba(0, 240, 255, 0.95);
+            color: #0A0E1A;
+            font-family: var(--font-ui);
+            font-weight: 700;
+            font-size: 16px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0, 240, 255, 0.45);
+            opacity: 0;
+            pointer-events: none;
+            z-index: 30;
+            transition: opacity 0.25s, transform 0.25s;
+        }
+        #share-toast.show {
+            opacity: 1;
+            transform: translate(-50%, 0);
+        }
+
+        #ach-toast {
+            position: fixed;
+            top: 24px; left: 50%; transform: translate(-50%, -120px);
+            background: rgba(10, 14, 26, 0.95);
+            border: 2px solid var(--neon-magenta);
+            border-radius: 12px;
+            padding: 14px 20px;
+            display: flex; align-items: center; gap: 14px;
+            box-shadow: 0 10px 30px rgba(255, 46, 151, 0.4);
+            opacity: 0;
+            pointer-events: none;
+            z-index: 30;
+            min-width: 280px;
+            max-width: 90vw;
+            transition: opacity 0.3s, transform 0.3s;
+        }
+        #ach-toast.show {
+            opacity: 1;
+            transform: translate(-50%, 0);
+        }
+        #ach-toast .ach-icon {
+            font-size: 36px; line-height: 1;
+            filter: drop-shadow(0 0 8px var(--neon-magenta));
+        }
+        #ach-toast .ach-text { text-align: left; }
+        #ach-toast .ach-name {
+            font-family: var(--font-display);
+            font-size: 18px;
+            color: var(--neon-magenta);
+            letter-spacing: 2px;
+            text-shadow: 0 0 8px var(--neon-magenta);
+        }
+        #ach-toast .ach-desc {
+            font-family: var(--font-ui);
+            font-size: 12px;
+            color: var(--text-bright);
+            margin-top: 2px;
+        }
+        #ach-toast .ach-meta {
+            font-family: var(--font-ui);
+            font-size: 10px;
+            color: var(--text-dim);
+            letter-spacing: 2px;
+            margin-top: 4px;
+            text-transform: uppercase;
+        }
+
+        /* ---------- Mobile portrait adjustments ---------- */
+        @media (max-width: 600px) and (orientation: portrait) {
+            .title-logo { max-height: 14vh; }
+            .modes { grid-template-columns: 1fr; }
+            .stats { grid-template-columns: 1fr; }
+            .panel .btn:not(.small) { width: 100%; margin: 4px 0; }
+            .share-row { flex-direction: column; }
+            .share-row .btn { width: 100%; }
+            .ach-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .lifetime-stats { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
@@ -392,6 +647,14 @@
                     <div class="name">HARDCORE</div>
                     <div class="desc">One life. Fast as hell.</div>
                 </div>
+                <div class="mode daily" data-mode="daily">
+                    <div class="cal">&#128197;</div>
+                    <div class="name">DAILY</div>
+                    <div class="desc" id="daily-date">—</div>
+                    <div class="daily-state" id="daily-state"></div>
+                    <canvas id="daily-spark" width="60" height="20"></canvas>
+                    <div class="daily-countdown" id="daily-countdown"></div>
+                </div>
             </div>
 
             <div class="stats">
@@ -401,6 +664,7 @@
             </div>
 
             <button class="btn" id="play-btn">Play</button>
+            <button class="link-btn" id="stats-link">View Stats &amp; Achievements</button>
         </div>
     </div>
 
@@ -414,11 +678,49 @@
                 <div class="stat"><div class="k">WPM</div><div class="v" id="go-wpm">0</div></div>
                 <div class="stat"><div class="k">Best Combo</div><div class="v" id="go-combo">0</div></div>
             </div>
-            <div id="go-new" style="display:none; color: var(--good); margin-bottom: 16px; font-weight: 600; letter-spacing: 2px;">&#9733; NEW HIGH SCORE &#9733;</div>
-            <button class="btn" id="again-btn">Play Again</button>
-            <button class="btn ghost" id="menu-btn">Main Menu</button>
+            <div id="go-new" style="display:none; color: var(--good); margin-bottom: 12px; font-weight: 600; letter-spacing: 2px;">&#9733; NEW HIGH SCORE &#9733;</div>
+            <img id="share-preview" alt="Share card preview" />
+            <div class="share-row">
+                <button class="btn share-btn" id="share-btn">Share</button>
+                <button class="btn ghost small" id="copy-btn">Copy Score</button>
+                <button class="link-btn" id="download-btn">Download PNG</button>
+            </div>
+            <div class="btn-row">
+                <button class="btn" id="again-btn">Play Again</button>
+                <button class="btn ghost" id="menu-btn">Main Menu</button>
+            </div>
         </div>
     </div>
+
+    <div class="overlay" id="daily-played">
+        <div class="panel">
+            <h2>DAILY DONE</h2>
+            <p id="dp-sub">You crushed today&rsquo;s puzzle.</p>
+            <div class="stats">
+                <div class="stat"><div class="k">Score</div><div class="v" id="dp-score">0</div></div>
+                <div class="stat"><div class="k">WPM</div><div class="v" id="dp-wpm">0</div></div>
+                <div class="stat"><div class="k">Best Combo</div><div class="v" id="dp-combo">0</div></div>
+            </div>
+            <div class="next-daily">NEXT DAILY IN&nbsp;<span id="dp-countdown">--:--:--</span></div>
+            <div class="btn-row">
+                <button class="btn" id="dp-share-btn">Share Result</button>
+                <button class="btn ghost" id="dp-close-btn">Back</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="overlay" id="stats-modal">
+        <div class="panel stats-panel">
+            <button class="close-x" id="stats-close" aria-label="Close">&times;</button>
+            <h2>STATS</h2>
+            <div class="lifetime-stats" id="lifetime-stats"></div>
+            <h3 class="section-h">ACHIEVEMENTS</h3>
+            <div class="ach-grid" id="ach-grid"></div>
+        </div>
+    </div>
+
+    <div id="share-toast"></div>
+    <div id="ach-toast"></div>
 
     <script src="game.js"></script>
 </body>
