@@ -5,6 +5,15 @@
 (() => {
 'use strict';
 
+// Surface any uncaught error to the console so we can actually debug
+// "nothing works" reports instead of guessing.
+window.addEventListener('error', (e) => {
+    console.error('Word Fall uncaught error:', e.message, 'at', e.filename + ':' + e.lineno, e.error);
+});
+window.addEventListener('unhandledrejection', (e) => {
+    console.error('Word Fall unhandled rejection:', e.reason);
+});
+
 // ---------- Word lists ----------
 const WORDS = {
     tier1: ('the and you for are but not all can had has was one our out his her she him who why how new old now use way day man men two big bad red sun sky run cat dog fly jam ice tea pen ink art mix box top map key bus car egg cup bag fox owl bee ant cow pig').split(' '),
@@ -3432,6 +3441,12 @@ const Tutorial = (() => {
         hide('menu');
         hide('gameover');
         show('tutorial');
+        // Self-wire the action buttons every time we open. This makes the
+        // tutorial bulletproof even if some earlier wire-up step threw.
+        // Replacing the node via cloneNode also drops any stale listeners.
+        bindAction('tut-next', () => Tutorial.next());
+        bindAction('tut-prev', () => Tutorial.prev());
+        bindAction('tut-skip', () => Tutorial.close(true));
         cancelAnimationFrame(raf);
         const tick = (t) => {
             demoT = t;
@@ -3439,6 +3454,16 @@ const Tutorial = (() => {
             raf = requestAnimationFrame(tick);
         };
         raf = requestAnimationFrame(tick);
+    }
+    function bindAction(id, fn) {
+        const old = document.getElementById(id);
+        if (!old) return;
+        const fresh = old.cloneNode(true);
+        old.parentNode.replaceChild(fresh, old);
+        const handler = (e) => { e.preventDefault(); e.stopPropagation(); fn(); };
+        fresh.addEventListener('click', handler);
+        fresh.addEventListener('pointerup', handler);
+        fresh.addEventListener('touchend', handler);
     }
     function close(skipped) {
         hide('tutorial');
@@ -3618,9 +3643,11 @@ function onPlayClicked() {
 }
 
 function wireStep5DOM() {
-    // Gear icon — swap in image if asset loaded
-    const gearBtn = document.getElementById('settings-btn');
-    if (gearBtn) {
+    const guard = (label, fn) => { try { fn(); } catch (e) { console.error('Word Fall wire failed:', label, e); } };
+
+    guard('settings-gear', () => {
+        const gearBtn = document.getElementById('settings-btn');
+        if (!gearBtn) return;
         if (Assets.iconSettings) {
             gearBtn.innerHTML = '';
             const img = document.createElement('img');
@@ -3632,93 +3659,94 @@ function wireStep5DOM() {
             populateSettingsModal();
             show('settings-modal');
         });
-    }
-    const howBtn = document.getElementById('how-btn');
-    if (howBtn) howBtn.addEventListener('click', () => Tutorial.open(() => {}));
-
-    // Settings close
-    const sx = document.getElementById('settings-close');
-    if (sx) sx.addEventListener('click', () => hide('settings-modal'));
-
-    // Sliders
-    const musicVol = document.getElementById('music-vol');
-    const sfxVol   = document.getElementById('sfx-vol');
-    const musicNum = document.getElementById('music-vol-num');
-    const sfxNum   = document.getElementById('sfx-vol-num');
-    function updateRangeFill(input) {
-        const pct = ((+input.value - input.min) / (input.max - input.min)) * 100;
-        input.style.backgroundSize = pct + '% 100%';
-    }
-    if (musicVol) {
-        musicVol.value = Settings.values.musicVol;
-        if (musicNum) musicNum.textContent = Settings.values.musicVol;
-        updateRangeFill(musicVol);
-        musicVol.addEventListener('input', () => {
-            const v = +musicVol.value;
-            Settings.set('musicVol', v);
-            if (musicNum) musicNum.textContent = v;
-            updateRangeFill(musicVol);
-        });
-    }
-    if (sfxVol) {
-        sfxVol.value = Settings.values.sfxVol;
-        if (sfxNum) sfxNum.textContent = Settings.values.sfxVol;
-        updateRangeFill(sfxVol);
-        sfxVol.addEventListener('input', () => {
-            const v = +sfxVol.value;
-            Settings.set('sfxVol', v);
-            if (sfxNum) sfxNum.textContent = v;
-            updateRangeFill(sfxVol);
-        });
-    }
-
-    // Toggles
-    const bindToggle = (id, key) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.checked = !!Settings.values[key];
-        el.addEventListener('change', () => Settings.set(key, el.checked));
-    };
-    bindToggle('music-on',      'musicOn');
-    bindToggle('sfx-on',        'sfxOn');
-    bindToggle('reduce-motion', 'reduceMotion');
-    bindToggle('show-fps',      'showFPS');
-
-    // Reset stats
-    const resetBtn = document.getElementById('reset-stats-btn');
-    if (resetBtn) resetBtn.addEventListener('click', () => show('confirm-reset'));
-    const cancelBtn = document.getElementById('confirm-cancel');
-    if (cancelBtn) cancelBtn.addEventListener('click', () => hide('confirm-reset'));
-    const confirmYes = document.getElementById('confirm-reset-yes');
-    if (confirmYes) confirmYes.addEventListener('click', () => {
-        try {
-            localStorage.removeItem('wordfall.high');
-            localStorage.removeItem('wordfall_lifetime_stats');
-            localStorage.removeItem('wordfall_achievements');
-            // Daily history
-            const keysToDelete = [];
-            for (let i = 0; i < localStorage.length; i++) {
-                const k = localStorage.key(i);
-                if (k && k.startsWith('wordfall_daily_')) keysToDelete.push(k);
-            }
-            keysToDelete.forEach(k => localStorage.removeItem(k));
-        } catch (e) {}
-        // Reset in-memory state
-        game.high = loadHigh();
-        refreshHighUI();
-        if (typeof refreshDailyCard === 'function') refreshDailyCard();
-        hide('confirm-reset');
-        hide('settings-modal');
-        shareToast('Stats reset');
     });
 
-    // Tutorial buttons
-    const tutNext = document.getElementById('tut-next');
-    const tutPrev = document.getElementById('tut-prev');
-    const tutSkip = document.getElementById('tut-skip');
-    if (tutNext) tutNext.addEventListener('click', () => Tutorial.next());
-    if (tutPrev) tutPrev.addEventListener('click', () => Tutorial.prev());
-    if (tutSkip) tutSkip.addEventListener('click', () => Tutorial.close(true));
+    guard('how-btn', () => {
+        const howBtn = document.getElementById('how-btn');
+        if (howBtn) howBtn.addEventListener('click', () => Tutorial.open(null));
+    });
+
+    guard('settings-close', () => {
+        const sx = document.getElementById('settings-close');
+        if (sx) sx.addEventListener('click', () => hide('settings-modal'));
+    });
+
+    guard('sliders', () => {
+        const musicVol = document.getElementById('music-vol');
+        const sfxVol   = document.getElementById('sfx-vol');
+        const musicNum = document.getElementById('music-vol-num');
+        const sfxNum   = document.getElementById('sfx-vol-num');
+        const updateRangeFill = (input) => {
+            const pct = ((+input.value - input.min) / (input.max - input.min)) * 100;
+            input.style.backgroundSize = pct + '% 100%';
+        };
+        if (musicVol) {
+            musicVol.value = Settings.values.musicVol;
+            if (musicNum) musicNum.textContent = Settings.values.musicVol;
+            updateRangeFill(musicVol);
+            musicVol.addEventListener('input', () => {
+                const v = +musicVol.value;
+                Settings.set('musicVol', v);
+                if (musicNum) musicNum.textContent = v;
+                updateRangeFill(musicVol);
+            });
+        }
+        if (sfxVol) {
+            sfxVol.value = Settings.values.sfxVol;
+            if (sfxNum) sfxNum.textContent = Settings.values.sfxVol;
+            updateRangeFill(sfxVol);
+            sfxVol.addEventListener('input', () => {
+                const v = +sfxVol.value;
+                Settings.set('sfxVol', v);
+                if (sfxNum) sfxNum.textContent = v;
+                updateRangeFill(sfxVol);
+            });
+        }
+    });
+
+    guard('toggles', () => {
+        const bindToggle = (id, key) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.checked = !!Settings.values[key];
+            el.addEventListener('change', () => Settings.set(key, el.checked));
+        };
+        bindToggle('music-on',      'musicOn');
+        bindToggle('sfx-on',        'sfxOn');
+        bindToggle('reduce-motion', 'reduceMotion');
+        bindToggle('show-fps',      'showFPS');
+    });
+
+    guard('reset-stats', () => {
+        const resetBtn = document.getElementById('reset-stats-btn');
+        if (resetBtn) resetBtn.addEventListener('click', () => show('confirm-reset'));
+        const cancelBtn = document.getElementById('confirm-cancel');
+        if (cancelBtn) cancelBtn.addEventListener('click', () => hide('confirm-reset'));
+        const confirmYes = document.getElementById('confirm-reset-yes');
+        if (confirmYes) confirmYes.addEventListener('click', () => {
+            try {
+                localStorage.removeItem('wordfall.high');
+                localStorage.removeItem('wordfall_lifetime_stats');
+                localStorage.removeItem('wordfall_achievements');
+                const keysToDelete = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const k = localStorage.key(i);
+                    if (k && k.startsWith('wordfall_daily_')) keysToDelete.push(k);
+                }
+                keysToDelete.forEach(k => localStorage.removeItem(k));
+            } catch (e) {}
+            game.high = loadHigh();
+            refreshHighUI();
+            if (typeof refreshDailyCard === 'function') refreshDailyCard();
+            hide('confirm-reset');
+            hide('settings-modal');
+            shareToast('Stats reset');
+        });
+    });
+
+    // Note: tutorial Next/Prev/Skip are now wired inside Tutorial.open()
+    // every time the overlay opens, so they always work even if anything
+    // above failed.
 }
 
 function populateSettingsModal() {
