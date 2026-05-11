@@ -254,7 +254,7 @@ const AudioManager = (() => {
             pools[name] = [];
             nextIdx[name] = 0;
             const src = SFX_MANIFEST[name];
-            const probe = new Audio();
+            const probe = new window.Audio();
             probe.preload = 'auto';
             probe.src = src;
             let settled = false;
@@ -264,7 +264,7 @@ const AudioManager = (() => {
                 if (ok) {
                     pools[name].push(probe);
                     for (let i = 1; i < 3; i++) {
-                        const c = new Audio();
+                        const c = new window.Audio();
                         c.preload = 'auto';
                         c.src = src;
                         pools[name].push(c);
@@ -287,7 +287,7 @@ const AudioManager = (() => {
             try { probe.load(); } catch (e) { settle(false); }
         });
         // Music element
-        musicEl = new Audio();
+        musicEl = new window.Audio();
         musicEl.preload = 'auto';
         musicEl.loop = true;
         musicEl.src = MUSIC_PATH;
