@@ -37,7 +37,12 @@
         html, body {
             margin: 0; padding: 0; height: 100%;
             background: var(--bg-deep);
-            background-image: radial-gradient(ellipse at top, var(--bg-mid), var(--bg-deep) 70%);
+            /* Layered radial accents: cyan glow top-left, magenta bottom-right,
+               plus the original ellipse at the top for depth. */
+            background-image:
+                radial-gradient(circle at 10% 20%, rgba(0, 240, 255, 0.07) 0%, transparent 42%),
+                radial-gradient(circle at 90% 80%, rgba(255, 46, 151, 0.06) 0%, transparent 42%),
+                radial-gradient(ellipse at top, var(--bg-mid), var(--bg-deep) 70%);
             color: var(--text-bright);
             font-family: var(--font-ui);
             overflow: hidden;
@@ -929,20 +934,21 @@
         }
         #ambient-letters span {
             position: absolute;
-            top: -40px;
+            top: -5vh;
             font-family: var(--font-game);
             font-weight: 400;
             color: var(--neon-cyan);
             text-shadow: 0 0 8px var(--neon-cyan);
             opacity: 0;
             user-select: none;
-            will-change: transform, opacity;
+            will-change: transform, opacity, filter;
         }
+        /* Falls AND rotates 360° for a more dynamic, organic feel. */
         @keyframes amb-fall {
-            0%   { transform: translateY(-40px); opacity: 0; }
-            10%  { opacity: var(--alpha, 0.5); }
-            90%  { opacity: var(--alpha, 0.5); }
-            100% { transform: translateY(110vh); opacity: 0; }
+            0%   { transform: translateY(-5vh) rotate(0deg); opacity: 0; }
+            10%  { opacity: var(--alpha, 0.4); }
+            90%  { opacity: var(--alpha, 0.4); }
+            100% { transform: translateY(110vh) rotate(360deg); opacity: 0; }
         }
 
         .menu-nav {
@@ -1336,7 +1342,6 @@
 
         <main class="menu-main">
             <section class="hero">
-                <img id="menu-logo" class="title-logo" alt="Word Fall" />
                 <h1 id="menu-title">WORD<span class="accent">FALL</span><span class="live-dot"><span></span></span></h1>
                 <p class="tagline">Where vocabulary meets gravity. Type the falling words before the screen fills.</p>
             </section>

@@ -3654,6 +3654,7 @@ function onPlayClicked() {
 // ====================================================================
 const AmbientLetters = (() => {
     const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const MAX_CONCURRENT = 25;
     let host = null;
     let interval = null;
     let active = false;
@@ -3665,25 +3666,29 @@ const AmbientLetters = (() => {
     }
     function spawn() {
         if (!active || !host) return;
+        // Skip during gameplay to avoid wasted work.
+        if (game.state !== 'menu') return;
+        // Hard cap on concurrent letters keeps the DOM lean even if the tab
+        // is backgrounded then resumed (browsers throttle but never stop rAF).
+        if (host.childElementCount >= MAX_CONCURRENT) return;
         const h = host.clientHeight || window.innerHeight;
         const w = host.clientWidth  || window.innerWidth;
         if (h < 100 || w < 100) return;
-        // Skip during gameplay to avoid wasted work.
-        if (game.state !== 'menu') return;
 
         const letter = document.createElement('span');
         letter.textContent = ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
-        const sz = 14 + Math.random() * 38;
-        const left = Math.random() * 100;
-        const dur = 7 + Math.random() * 8;     // 7–15s fall
-        const alpha = 0.10 + Math.random() * 0.35;
-        // Magenta accent on ~25% of letters for variety
+        const size = 1 + Math.random() * 1.5;          // 1rem → 2.5rem
+        const left = Math.random() * 100;              // viewport columns
+        const dur  = 8 + Math.random() * 7;            // 8–15s fall
+        const alpha = 0.08 + Math.random() * 0.28;     // gentle depth
+        const blur = Math.random() * 2;                // 0–2px parallax blur
+        // Magenta accent on ~25% of letters for palette variety
         const useMagenta = Math.random() < 0.25;
         letter.style.left = left + 'vw';
-        letter.style.fontSize = sz + 'px';
+        letter.style.fontSize = size + 'rem';
+        letter.style.filter = `blur(${blur.toFixed(2)}px)`;
         letter.style.setProperty('--alpha', alpha.toFixed(2));
         letter.style.animation = `amb-fall ${dur}s linear forwards`;
-        letter.style.animationDelay = -(Math.random() * 2) + 's';
         if (useMagenta) {
             letter.style.color = 'var(--neon-magenta)';
             letter.style.textShadow = '0 0 8px var(--neon-magenta)';
@@ -3695,10 +3700,14 @@ const AmbientLetters = (() => {
         ensureHost();
         if (!host || interval) return;
         active = true;
-        // Two letters per second feels alive without being noisy.
-        interval = setInterval(spawn, 500);
-        // Seed a few immediately so it doesn't look empty.
-        for (let i = 0; i < 6; i++) setTimeout(spawn, i * 200);
+        // Ongoing stream — slightly under one per second so blur'd big letters
+        // breathe properly.
+        interval = setInterval(spawn, 1100);
+        // Stagger the initial batch across the first 6 seconds so the screen
+        // doesn't snap from empty → full all at once.
+        for (let i = 0; i < MAX_CONCURRENT; i++) {
+            setTimeout(spawn, Math.random() * 6000);
+        }
     }
     function stop() {
         active = false;
