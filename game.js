@@ -218,7 +218,9 @@ const Audio = (() => {
 // loop. If any file fails to load, that sound silently falls back to the
 // procedural beep. Music waits for the first user interaction (autoplay rule).
 const SFX_MANIFEST = {
-    type:           'assets/audio/sfx-type.mp3',
+    // Locally-synthesised typewriter click (see tools/synth-typewriter.py).
+    // Shorter / sharper than the original MP3 so rapid typing doesn't smear.
+    type:           'assets/audio/sfx-type.wav',
     lock:           'assets/audio/sfx-lock.mp3',
     destroy:        'assets/audio/sfx-destroy.mp3',
     combo:          'assets/audio/sfx-combo.mp3',
