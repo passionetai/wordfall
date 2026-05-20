@@ -908,6 +908,381 @@
             transition: width 0.15s ease-out;
         }
 
+        /* =====================================================================
+           Redesigned main menu (replaces the centered single-panel layout)
+           ===================================================================== */
+        #menu {
+            padding: 0;
+            align-items: stretch;
+            justify-content: stretch;
+        }
+        #menu .panel { display: none; } /* legacy panel hidden — new structure below */
+
+        #ambient-letters {
+            position: absolute;
+            inset: 0;
+            overflow: hidden;
+            pointer-events: none;
+            z-index: 0;
+            mask-image: linear-gradient(to bottom, transparent, #000 15%, #000 80%, transparent);
+            -webkit-mask-image: linear-gradient(to bottom, transparent, #000 15%, #000 80%, transparent);
+        }
+        #ambient-letters span {
+            position: absolute;
+            top: -40px;
+            font-family: var(--font-game);
+            font-weight: 400;
+            color: var(--neon-cyan);
+            text-shadow: 0 0 8px var(--neon-cyan);
+            opacity: 0;
+            user-select: none;
+            will-change: transform, opacity;
+        }
+        @keyframes amb-fall {
+            0%   { transform: translateY(-40px); opacity: 0; }
+            10%  { opacity: var(--alpha, 0.5); }
+            90%  { opacity: var(--alpha, 0.5); }
+            100% { transform: translateY(110vh); opacity: 0; }
+        }
+
+        .menu-nav {
+            position: relative;
+            z-index: 2;
+            width: 100%;
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: clamp(14px, 2.5vh, 22px) clamp(18px, 4vw, 36px);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+        }
+        .menu-nav .brand {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 2px;
+            text-decoration: none;
+            font-family: var(--font-display);
+            font-size: clamp(20px, 2.6vw, 26px);
+            letter-spacing: 3px;
+            line-height: 1;
+        }
+        .menu-nav .brand-mark {
+            color: var(--text-bright);
+            text-shadow: 0 0 12px rgba(0, 240, 255, 0.5);
+        }
+        .menu-nav .brand-mark.accent {
+            color: var(--neon-magenta);
+            text-shadow: 0 0 12px var(--neon-magenta);
+        }
+        .menu-nav .nav-actions {
+            display: flex;
+            gap: 8px;
+        }
+        /* Override the previously-absolute icon-btn positioning when in the nav */
+        .menu-nav .icon-btn {
+            position: static;
+            top: auto; right: auto;
+            width: 42px; height: 42px;
+            border-radius: 10px;
+            font-size: 22px;
+        }
+
+        .menu-main {
+            position: relative;
+            z-index: 2;
+            width: 100%;
+            max-width: 480px;
+            margin: 0 auto;
+            padding: clamp(6px, 1vh, 14px) clamp(18px, 4vw, 28px) clamp(12px, 2vh, 24px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: clamp(14px, 2vh, 20px);
+            flex: 1;
+            min-height: 0;
+        }
+        .hero { text-align: center; }
+        .hero .title-logo {
+            max-height: 22vh;
+            max-width: min(360px, 70vw);
+            margin: 0 auto 8px;
+        }
+        .hero .title-logo.go { max-width: min(220px, 50vw); }
+        #menu-title {
+            position: relative;
+            display: inline-block;
+            font-family: var(--font-display);
+            font-size: clamp(40px, 7vw, 64px);
+            color: var(--text-bright);
+            text-shadow: 0 0 16px rgba(0, 240, 255, 0.45);
+            letter-spacing: 3px;
+            margin: 0 0 6px;
+            font-weight: 400;
+            line-height: 1.05;
+        }
+        #menu-title .accent {
+            color: var(--neon-magenta);
+            text-shadow: 0 0 16px var(--neon-magenta);
+        }
+        #menu-title .live-dot {
+            position: absolute;
+            top: -6px; right: -16px;
+            width: 12px; height: 12px;
+            display: inline-block;
+        }
+        #menu-title .live-dot::before,
+        #menu-title .live-dot span {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            background: var(--neon-magenta);
+        }
+        #menu-title .live-dot::before {
+            animation: live-ping 1.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+            opacity: 0.75;
+        }
+        @keyframes live-ping {
+            0%   { transform: scale(1);   opacity: 0.75; }
+            75%, 100% { transform: scale(2.5); opacity: 0; }
+        }
+        .tagline {
+            color: var(--text-dim);
+            font-size: clamp(0.9rem, 1.4vw, 1.05rem);
+            line-height: 1.55;
+            margin: 0 auto;
+            max-width: 38ch;
+        }
+
+        /* Mode picker — 4 compact pill-cards */
+        #menu .modes {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 8px;
+            margin: 0;
+            width: 100%;
+        }
+        #menu .mode {
+            position: relative;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 10px 8px;
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s, transform 0.15s;
+            color: var(--text-bright);
+            text-align: center;
+            font-family: var(--font-ui);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            min-width: 0;
+        }
+        #menu .mode .name {
+            font-size: clamp(0.7rem, 1.3vw, 0.85rem);
+            font-weight: 700;
+            letter-spacing: 1px;
+            line-height: 1.1;
+        }
+        #menu .mode .desc {
+            font-size: clamp(0.55rem, 1vw, 0.7rem);
+            color: var(--text-dim);
+            letter-spacing: 0.5px;
+            line-height: 1.2;
+        }
+        #menu .mode:hover {
+            background: rgba(0, 240, 255, 0.05);
+            border-color: rgba(0, 240, 255, 0.35);
+            transform: translateY(-1px);
+        }
+        #menu .mode.selected {
+            background: rgba(0, 240, 255, 0.10);
+            border-color: var(--neon-cyan);
+            box-shadow: 0 0 12px rgba(0, 240, 255, 0.25), inset 0 0 12px rgba(0, 240, 255, 0.08);
+        }
+        #menu .mode.daily {
+            border-color: rgba(255, 46, 151, 0.45);
+        }
+        #menu .mode.daily.selected {
+            border-color: var(--neon-magenta);
+            background: rgba(255, 46, 151, 0.12);
+            box-shadow: 0 0 12px rgba(255, 46, 151, 0.3);
+        }
+        #menu .mode.daily .badge {
+            position: absolute;
+            top: -7px;
+            right: -6px;
+            background: rgba(255, 46, 151, 0.22);
+            border: 1px solid rgba(255, 46, 151, 0.55);
+            color: var(--neon-magenta);
+            font-family: var(--font-ui);
+            font-weight: 700;
+            font-size: 9px;
+            letter-spacing: 1.5px;
+            padding: 2px 6px;
+            border-radius: 999px;
+        }
+        #menu .mode.daily .name { display: none; } /* badge replaces label */
+        #menu .mode.daily .desc { margin-top: 6px; color: var(--text-bright); font-weight: 600; }
+        #menu .mode.daily .daily-state {
+            margin-top: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--neon-magenta);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+        #menu #daily-spark { margin-top: 4px; }
+        #menu .mode.daily .daily-countdown {
+            font-family: var(--font-game);
+            font-size: 11px;
+            color: var(--text-bright);
+            margin-top: 2px;
+            min-height: 14px;
+        }
+
+        /* Primary play CTA */
+        .btn-primary {
+            width: 100%;
+            padding: clamp(14px, 1.8vh, 18px) clamp(22px, 3vw, 28px);
+            border-radius: 14px;
+            background: linear-gradient(135deg, var(--neon-cyan), var(--neon-magenta));
+            color: #0A0E1A;
+            border: none;
+            cursor: pointer;
+            font-family: var(--font-display);
+            font-size: clamp(1.3rem, 3.5vw, 1.7rem);
+            letter-spacing: 4px;
+            line-height: 1;
+            box-shadow: 0 0 24px rgba(0, 240, 255, 0.32), 0 0 36px rgba(255, 46, 151, 0.2);
+            transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 0 30px rgba(0, 240, 255, 0.55), 0 0 50px rgba(255, 46, 151, 0.35);
+            filter: brightness(1.05);
+        }
+        .btn-primary:active { transform: translateY(0); }
+        .btn-primary .label {
+            display: block;
+            font-weight: 400;
+            text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
+        }
+        .btn-primary .sub {
+            display: block;
+            margin-top: 4px;
+            font-family: var(--font-ui);
+            font-size: 11px;
+            letter-spacing: 2px;
+            color: rgba(10, 14, 26, 0.85);
+            text-transform: uppercase;
+        }
+
+        /* Quick guide card */
+        .quick-guide {
+            width: 100%;
+            background: rgba(10, 14, 26, 0.45);
+            border: 1px solid rgba(0, 240, 255, 0.18);
+            border-radius: 14px;
+            padding: 14px 16px 16px;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+        .quick-guide h3 {
+            font-family: var(--font-ui);
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--text-dim);
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin: 0 0 10px;
+            text-align: center;
+        }
+        .qg-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+        }
+        .qg-step { text-align: center; min-width: 0; }
+        .qg-step .num {
+            width: 32px; height: 32px;
+            border-radius: 10px;
+            background: rgba(0, 240, 255, 0.08);
+            border: 1px solid rgba(0, 240, 255, 0.3);
+            color: var(--neon-cyan);
+            font-family: var(--font-display);
+            font-size: 18px;
+            display: flex; align-items: center; justify-content: center;
+            margin: 0 auto 6px;
+        }
+        .qg-step:nth-child(2) .num {
+            background: rgba(255, 46, 151, 0.08);
+            border-color: rgba(255, 46, 151, 0.3);
+            color: var(--neon-magenta);
+        }
+        .qg-step:nth-child(3) .num {
+            background: rgba(255, 217, 61, 0.08);
+            border-color: rgba(255, 217, 61, 0.3);
+            color: var(--bonus-gold);
+        }
+        .qg-step p {
+            font-size: 11px;
+            color: var(--text-bright);
+            line-height: 1.3;
+            margin: 0;
+        }
+
+        /* Stats strip in new layout */
+        #menu .stats {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+            margin: 0;
+            width: 100%;
+        }
+        #menu .stat {
+            padding: 10px 8px;
+            background: rgba(255, 255, 255, 0.03);
+            border-color: rgba(255, 255, 255, 0.08);
+        }
+        #menu .stat .v { font-size: clamp(1.1rem, 2.5vw, 1.5rem); }
+
+        #menu .link-btn { color: var(--text-dim); }
+        #menu .link-btn:hover { color: var(--neon-cyan); }
+
+        .menu-footer {
+            position: relative;
+            z-index: 2;
+            width: 100%;
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 14px clamp(18px, 4vw, 36px);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--text-dim);
+            font-size: 11px;
+            letter-spacing: 1px;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            text-transform: uppercase;
+        }
+        .menu-footer a {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: inherit;
+            text-decoration: none;
+            transition: color 0.15s;
+        }
+        .menu-footer a:hover { color: var(--neon-cyan); }
+
+        /* Narrow viewports: stack mode cards 2x2 */
+        @media (max-width: 560px) {
+            #menu .modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            #menu .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .qg-grid { gap: 6px; }
+        }
+
         /* ---------- Mobile portrait adjustments ---------- */
         @media (max-width: 600px) and (orientation: portrait) {
             .title-logo { max-height: 14vh; }
@@ -934,46 +1309,100 @@
     <div id="boot-progress"><div class="fill"></div></div>
 
     <div class="overlay show" id="menu">
-        <button class="icon-btn settings-corner" id="settings-btn" aria-label="Settings"><span class="fallback">&#9881;</span></button>
-        <button class="icon-btn how-corner" id="how-btn" aria-label="How to play">?</button>
-        <div class="panel">
-            <img id="menu-logo" class="title-logo" alt="Word Fall" />
-            <h1 id="menu-title">WORD FALL</h1>
-            <p>Type the falling words before they crash. Build combos, earn power-ups,
-               climb the leaderboard.</p>
+        <div id="ambient-letters" aria-hidden="true"></div>
 
-            <div class="modes" id="mode-select">
-                <div class="mode selected" data-mode="classic">
-                    <div class="name">CLASSIC</div>
-                    <div class="desc">Steady ramp. 5 lives.</div>
-                </div>
-                <div class="mode" data-mode="sprint">
-                    <div class="name">SPRINT</div>
-                    <div class="desc">90 seconds. Max points.</div>
-                </div>
-                <div class="mode" data-mode="hardcore">
-                    <div class="name">HARDCORE</div>
-                    <div class="desc">One life. Fast as hell.</div>
-                </div>
-                <div class="mode daily" data-mode="daily">
-                    <div class="cal">&#128197;</div>
-                    <div class="name">DAILY</div>
-                    <div class="desc" id="daily-date">—</div>
-                    <div class="daily-state" id="daily-state"></div>
+        <header class="menu-nav">
+            <a class="brand" href="#" aria-label="Word Fall">
+                <span class="brand-mark">W</span><span class="brand-mark accent">F</span>
+            </a>
+            <div class="nav-actions">
+                <button class="icon-btn" id="how-btn" aria-label="How to play">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    </svg>
+                </button>
+                <button class="icon-btn" id="stats-link-icon" aria-label="View Stats &amp; Achievements">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <line x1="6"  y1="20" x2="6"  y2="10"></line>
+                        <line x1="12" y1="20" x2="12" y2="4"></line>
+                        <line x1="18" y1="20" x2="18" y2="14"></line>
+                    </svg>
+                </button>
+                <button class="icon-btn" id="settings-btn" aria-label="Settings"><span class="fallback">&#9881;</span></button>
+            </div>
+        </header>
+
+        <main class="menu-main">
+            <section class="hero">
+                <img id="menu-logo" class="title-logo" alt="Word Fall" />
+                <h1 id="menu-title">WORD<span class="accent">FALL</span><span class="live-dot"><span></span></span></h1>
+                <p class="tagline">Where vocabulary meets gravity. Type the falling words before the screen fills.</p>
+            </section>
+
+            <div class="modes" id="mode-select" role="radiogroup" aria-label="Game mode">
+                <button class="mode selected" data-mode="classic" role="radio">
+                    <span class="name">CLASSIC</span>
+                    <span class="desc">5 lives · endless</span>
+                </button>
+                <button class="mode" data-mode="sprint" role="radio">
+                    <span class="name">SPRINT</span>
+                    <span class="desc">90 seconds</span>
+                </button>
+                <button class="mode" data-mode="hardcore" role="radio">
+                    <span class="name">HARDCORE</span>
+                    <span class="desc">One life</span>
+                </button>
+                <button class="mode daily" data-mode="daily" role="radio">
+                    <span class="badge">DAILY</span>
+                    <span class="name">DAILY</span>
+                    <span class="desc" id="daily-date">—</span>
+                    <span class="daily-state" id="daily-state"></span>
                     <canvas id="daily-spark" width="60" height="20"></canvas>
-                    <div class="daily-countdown" id="daily-countdown"></div>
-                </div>
+                    <span class="daily-countdown" id="daily-countdown"></span>
+                </button>
             </div>
 
-            <div class="stats">
+            <button id="play-btn" class="btn-primary">
+                <span class="label">PLAY</span>
+                <span class="sub">Build combos · earn power-ups</span>
+            </button>
+
+            <section class="quick-guide" aria-label="Quick guide">
+                <h3>Quick Guide</h3>
+                <div class="qg-grid">
+                    <div class="qg-step">
+                        <div class="num">1</div>
+                        <p>Words fall from above</p>
+                    </div>
+                    <div class="qg-step">
+                        <div class="num">2</div>
+                        <p>Type to lock &amp; destroy</p>
+                    </div>
+                    <div class="qg-step">
+                        <div class="num">3</div>
+                        <p>Combo for power-ups</p>
+                    </div>
+                </div>
+            </section>
+
+            <div class="stats" aria-label="Personal bests">
                 <div class="stat"><div class="k">High Score</div><div class="v" id="hs-score">0</div></div>
                 <div class="stat"><div class="k">Best WPM</div><div class="v" id="hs-wpm">0</div></div>
                 <div class="stat"><div class="k">Best Combo</div><div class="v" id="hs-combo">0</div></div>
             </div>
 
-            <button class="btn" id="play-btn">Play</button>
-            <button class="link-btn" id="stats-link">View Stats &amp; Achievements</button>
-        </div>
+            <button class="link-btn" id="stats-link">View Stats &amp; Achievements &rarr;</button>
+        </main>
+
+        <footer class="menu-footer">
+            <span>&copy; 2026 Word Fall</span>
+            <a href="https://github.com/passionetai/wordfall" target="_blank" rel="noopener" aria-label="Source on GitHub">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                <span>Source</span>
+            </a>
+        </footer>
     </div>
 
     <div class="overlay" id="gameover">

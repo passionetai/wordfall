@@ -684,6 +684,7 @@ function init() {
         applyLogoAssets();
         // Once images are done we can show the menu; audio finishes in background.
         game.state = 'menu';
+        if (typeof AmbientLetters !== 'undefined') AmbientLetters.start();
     });
 
     // Kick off audio preload in parallel
@@ -772,6 +773,7 @@ function startGame() {
     }
 
     game.state = 'playing';
+    if (typeof AmbientLetters !== 'undefined') AmbientLetters.stop();
     game.words = []; game.bullets = []; game.particles = []; game.floaters = [];
     game.target = null; game.input = '';
     game.score = 0; game.level = 1;
@@ -808,6 +810,7 @@ function startGame() {
 
 function toMenu() {
     game.state = 'menu';
+    if (typeof AmbientLetters !== 'undefined') AmbientLetters.start();
     show('menu'); hide('gameover');
     refreshHighUI();
     if (typeof refreshDailyCard === 'function') refreshDailyCard();
@@ -3231,11 +3234,12 @@ function wireStep4DOM() {
             }
         });
     });
-    // Stats link
-    document.getElementById('stats-link').addEventListener('click', () => {
-        populateStatsModal();
-        show('stats-modal');
-    });
+    // Stats link (and the new nav icon variant)
+    const openStats = () => { populateStatsModal(); show('stats-modal'); };
+    const sLink = document.getElementById('stats-link');
+    if (sLink) sLink.addEventListener('click', openStats);
+    const sIcon = document.getElementById('stats-link-icon');
+    if (sIcon) sIcon.addEventListener('click', openStats);
     document.getElementById('stats-close').addEventListener('click', () => hide('stats-modal'));
     // Daily-played modal
     document.getElementById('dp-close-btn').addEventListener('click', () => hide('daily-played'));
@@ -3641,6 +3645,71 @@ function onPlayClicked() {
         startGame();
     }
 }
+
+// ====================================================================
+// Step 5+ — Ambient falling letters in the main menu background
+// Lightweight DOM-based: spawns one letter on a metronome, lets CSS
+// animate the fall, removes the node on animation end. Auto-pauses
+// when the menu is not visible to save CPU.
+// ====================================================================
+const AmbientLetters = (() => {
+    const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    let host = null;
+    let interval = null;
+    let active = false;
+
+    function ensureHost() {
+        if (host) return host;
+        host = document.getElementById('ambient-letters');
+        return host;
+    }
+    function spawn() {
+        if (!active || !host) return;
+        const h = host.clientHeight || window.innerHeight;
+        const w = host.clientWidth  || window.innerWidth;
+        if (h < 100 || w < 100) return;
+        // Skip during gameplay to avoid wasted work.
+        if (game.state !== 'menu') return;
+
+        const letter = document.createElement('span');
+        letter.textContent = ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
+        const sz = 14 + Math.random() * 38;
+        const left = Math.random() * 100;
+        const dur = 7 + Math.random() * 8;     // 7–15s fall
+        const alpha = 0.10 + Math.random() * 0.35;
+        // Magenta accent on ~25% of letters for variety
+        const useMagenta = Math.random() < 0.25;
+        letter.style.left = left + 'vw';
+        letter.style.fontSize = sz + 'px';
+        letter.style.setProperty('--alpha', alpha.toFixed(2));
+        letter.style.animation = `amb-fall ${dur}s linear forwards`;
+        letter.style.animationDelay = -(Math.random() * 2) + 's';
+        if (useMagenta) {
+            letter.style.color = 'var(--neon-magenta)';
+            letter.style.textShadow = '0 0 8px var(--neon-magenta)';
+        }
+        host.appendChild(letter);
+        letter.addEventListener('animationend', () => letter.remove(), { once: true });
+    }
+    function start() {
+        ensureHost();
+        if (!host || interval) return;
+        active = true;
+        // Two letters per second feels alive without being noisy.
+        interval = setInterval(spawn, 500);
+        // Seed a few immediately so it doesn't look empty.
+        for (let i = 0; i < 6; i++) setTimeout(spawn, i * 200);
+    }
+    function stop() {
+        active = false;
+        if (interval) { clearInterval(interval); interval = null; }
+        if (host) host.innerHTML = '';
+    }
+    function refreshForState() {
+        if (game.state === 'menu') start(); else stop();
+    }
+    return { start, stop, refreshForState };
+})();
 
 function wireStep5DOM() {
     const guard = (label, fn) => { try { fn(); } catch (e) { console.error('Word Fall wire failed:', label, e); } };
