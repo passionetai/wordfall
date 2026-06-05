@@ -712,6 +712,13 @@ function mobileScale() {
     return isTouchActive() ? 0.85 : 1;
 }
 const TWIN_CHAIN_MS = 2000;
+// Power-up buff durations. Read by usePowerup (activation), update (decay),
+// and the freeze tint formula in draw — single source of truth so toast
+// strings and visuals can't drift apart.
+const POWERUP_DURATIONS = {
+    freeze: 18000,
+    shield: 25000,
+};
 
 const game = {
     mode: 'classic',
@@ -728,7 +735,7 @@ const game = {
     combo: 0, bestCombo: 0,
     multiplier: 1, comboTimer: 0,
     spawnCooldown: 0, spawnInterval: 1800,
-    freezeTimer: 0, shield: false,
+    freezeTimer: 0, shieldTimer: 0,
     powerups: { freeze: 0, bomb: 0, shield: 0 },
     shake: 0, flash: 0, flashColor: '#ffffff',
     wordsCompleted: 0, charsTyped: 0,
@@ -872,7 +879,6 @@ function applyLogoAssets() {
         if (img) { el.src = img.src; el.classList.add('loaded'); }
     };
     set('menu-logo', Assets.logo);
-    set('go-logo',  Assets.logo);
 }
 
 function resize() {
@@ -926,7 +932,7 @@ function startGame() {
     game.combo = 0; game.bestCombo = 0;
     game.multiplier = 1; game.comboTimer = 0;
     game.spawnCooldown = 600;
-    game.freezeTimer = 0; game.shield = false;
+    game.freezeTimer = 0; game.shieldTimer = 0;
     game.shake = 0; game.flash = 0;
     game.wordsCompleted = 0; game.charsTyped = 0;
     game.startTime = performance.now();
@@ -1127,8 +1133,10 @@ function measureWordWidth(text, size) {
 }
 
 function baseFallSpeed() {
+    // Per-level acceleration softened so act 2+ stays fun, not punishing.
+    // (Was +0.0045/level — that compounded with the spawn-interval cut.)
     const jitter = (rng() - 0.5) * 0.012;
-    return 0.020 + (game.level - 1) * 0.0045 + jitter;
+    return 0.020 + (game.level - 1) * 0.0032 + jitter;
 }
 
 function spawnNormal() {
@@ -1268,10 +1276,10 @@ function actConfig(actNum) {
 function bossTier(level) { return Math.max(0, Math.floor((level - 5) / 5)); }
 
 function bossSpeedForLevel(level) {
-    // Falls faster every tier so later bosses demand higher real WPM.
-    // 0.5× baseFallSpeed at L5 → capped at 1.4× by L40.
+    // Softer ramp: 0.5× baseFallSpeed at L5 → capped at 1.2× by L40.
+    // The countdown timer is the primary pressure; fall speed is the secondary.
     const tier = bossTier(level);
-    return baseFallSpeed() * Math.min(1.4, 0.5 + tier * 0.12);
+    return baseFallSpeed() * Math.min(1.2, 0.5 + tier * 0.09);
 }
 
 function bossSizeMultiplierForLevel(level) {
@@ -1279,16 +1287,20 @@ function bossSizeMultiplierForLevel(level) {
     return Math.min(3.4, 2.5 + Math.max(0, level - 5) * 0.04);
 }
 
-// Milliseconds allowed per boss letter. Generous on the first boss, tighter
-// each tier — this is the "you can't stall" countdown budget.
+// Milliseconds allowed per boss letter. Generous on the first boss and
+// loosened overall — the descent moves bit by bit per tier so each stage
+// only nudges the squeeze tighter.
+//   L5: 1200 (≈14s on a 12-letter boss)
+//   L10: 1100, L15: 1000, L20: 900, L25: 800, L30: 700
+//   floor 650.
 function bossPerLetterMs(level) {
-    return Math.max(420, 900 - bossTier(level) * 160);
+    return Math.max(650, 1200 - bossTier(level) * 100);
 }
 
 // Idle window (ms) before an unfinished boss starts regrowing letters.
-// Disabled below L10; tightens each tier after that.
+// Disabled below L10; loosened so the regrowth penalty is less twitchy.
 function bossRegrowIdleMs(level) {
-    return Math.max(1000, 2200 - bossTier(level) * 300);
+    return Math.max(1400, 2600 - bossTier(level) * 240);
 }
 
 function spawnBoss() {
@@ -1389,7 +1401,10 @@ function beginNextAct() {
     hide('act-break');
     game.state = 'playing';
     game.actBreakT = 0;
-    game.spawnCooldown = 700;            // brief grace before words resume
+    game.spawnCooldown = 1200;           // generous grace so the act eases in
+    // Refund a chunk of spawn interval — each act gets a breather instead of
+    // stacking the previous act's tightest cadence on top of new bosses.
+    game.spawnInterval = Math.min(1800, game.spawnInterval + 220);
     game.last = performance.now();       // avoid a dt spike after the pause
 }
 
@@ -1721,7 +1736,8 @@ function levelUpCheck() {
         game.level = targetLevel;
         Audio.levelUp();
         showToast(`LEVEL ${game.level}`, '#FF2E97');
-        game.spawnInterval = Math.max(550, game.spawnInterval - 130);
+        // Gentler ramp + higher floor: keeps later acts playable.
+        game.spawnInterval = Math.max(700, game.spawnInterval - 90);
         game.flash = 0.4; game.flashColor = '#00F0FF';
         // Boss every 5th level
         if (isBossLevel(game.level) && !game.bossDefeatedAtLevels.has(game.level)) {
@@ -1766,8 +1782,8 @@ function missWord(w) {
         // Partner already completed — single miss
     }
     // Shield consumes the miss
-    if (game.shield) {
-        game.shield = false;
+    if (game.shieldTimer > 0) {
+        game.shieldTimer = 0;
         showToast('SHIELD BROKE', '#FF8A00');
         game.flash = 0.5; game.flashColor = '#FF8A00';
         game.shake = Math.max(game.shake, 8);
@@ -1803,8 +1819,8 @@ function usePowerup(kind) {
     AudioManager.playSFX('powerup', () => {}, { volume: 0.9 });
 
     if (kind === 'freeze') {
-        game.freezeTimer = 4500;
-        showToast('FREEZE', '#00F0FF');
+        game.freezeTimer = POWERUP_DURATIONS.freeze;
+        showToast(`FREEZE  ${POWERUP_DURATIONS.freeze / 1000}s`, '#00F0FF');
         game.flash = 0.3; game.flashColor = '#00F0FF';
     } else if (kind === 'bomb') {
         const targets = game.words.filter(w => w.type !== 'boss');
@@ -1827,8 +1843,10 @@ function usePowerup(kind) {
         game.flash = 0.5; game.flashColor = '#FF2E97';
         showToast(`BOMB x${reward}`, '#FF2E97');
     } else if (kind === 'shield') {
-        game.shield = true;
-        showToast('SHIELD UP', '#00FF9F');
+        // Timed buff. Also absorbs the next miss within the window (which
+        // then drops the shield early via missWord).
+        game.shieldTimer = POWERUP_DURATIONS.shield;
+        showToast(`SHIELD UP  ${POWERUP_DURATIONS.shield / 1000}s`, '#00FF9F');
     }
 }
 
@@ -1999,6 +2017,14 @@ function update(dt) {
     let ts = 1;
     if (game.freezeTimer > 0) { game.freezeTimer -= dt; ts = 0.25; }
     const sdt = dt * ts;
+    // Shield timer (also drops on absorb in missWord).
+    if (game.shieldTimer > 0) {
+        game.shieldTimer -= dt;
+        if (game.shieldTimer <= 0) {
+            game.shieldTimer = 0;
+            showToast('SHIELD DOWN', '#FF8A00');
+        }
+    }
 
     // Boss warning timer
     if (game.bossState === 'warning') {
@@ -2211,10 +2237,10 @@ function draw(dt) {
     drawParticles(ctx);
     drawFloaters(ctx);
 
-    if (game.shield) drawShieldAura(ctx, w, h);
+    if (game.shieldTimer > 0) drawShieldAura(ctx, w, h);
 
     if (game.freezeTimer > 0) {
-        const a = Math.min(0.25, game.freezeTimer / 4500 * 0.25);
+        const a = Math.min(0.25, game.freezeTimer / POWERUP_DURATIONS.freeze * 0.25);
         ctx.fillStyle = `rgba(0, 240, 255, ${a})`;
         ctx.fillRect(0, 0, w, h);
         const grad = ctx.createLinearGradient(0, 0, 0, h);
@@ -2448,9 +2474,21 @@ function drawWords(ctx) {
         ctx.font = `${fontSize}px VT323, monospace`;
 
         if (w.type === 'decoy') {
-            const alpha = 0.15 + 0.4 * (0.5 + 0.5 * Math.sin(t / 1500 * 2 * Math.PI));
+            // Was almost invisible — bump the pulse range, give it a soft
+            // ghost-cyan glow + a strikethrough so it's obviously a 'fake'
+            // word but still readable.
+            const alpha = 0.55 + 0.30 * (0.5 + 0.5 * Math.sin(t / 1500 * 2 * Math.PI));
             ctx.globalAlpha = alpha;
-            drawWordSegment(ctx, w.text, x, y, 'rgba(107, 114, 153, 0.85)', null, 0, /*centered*/true);
+            drawWordSegment(ctx, w.text, x, y, '#9fb0d8', '#9fb0d8', 10, /*centered*/true);
+            // Strikethrough hint (also doubles as a clear "do not type" cue).
+            // Reuses the spawn-time width on the word object — no per-frame
+            // measureText.
+            ctx.strokeStyle = 'rgba(159, 176, 216, 0.7)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(x - w.width / 2, y);
+            ctx.lineTo(x + w.width / 2, y);
+            ctx.stroke();
             ctx.globalAlpha = 1;
             ctx.restore();
             continue;
