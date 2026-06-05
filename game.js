@@ -4398,22 +4398,33 @@ function populateSettingsModal() {
 //   tier-controlled CPS. Phase 2 will add player-launched attack racks.
 // ====================================================================
 const Versus = (() => {
+    // Per-tier knobs. Independent dials now:
+    //   botCps         — bot 'types' at this characters/sec (defends bot side)
+    //   travelMs       — how long a word takes edge-to-edge (player reading time)
+    //   playerSpawnMs  — cadence between words spawned AT the player
+    //   botSpawnMs     — cadence between words spawned AT the bot
+    //   maxYouOnScreen — concurrency cap for incoming-at-you (set to 1 for
+    //                    a TRUE rookie experience: one word at a time)
+    //   maxCpuOnScreen — same for the bot side
     const TIERS = {
         rookie: {
-            label: 'ROOKIE',  approxWpm: 30,
-            botCps: 2.5,   playerSpawnMs: 1800, botSpawnMs: 2100,
-            wordLenMin: 4, wordLenMax: 7,
-            specialWeights: { normal: 0.85, bonus: 0.10, decoy: 0.05 },
+            label: 'ROOKIE',  approxWpm: 20,
+            botCps: 1.7,   travelMs: 7200, playerSpawnMs: 3200, botSpawnMs: 3000,
+            maxYouOnScreen: 1, maxCpuOnScreen: 1,
+            wordLenMin: 4, wordLenMax: 6,
+            specialWeights: { normal: 0.92, bonus: 0.08 },
         },
         rival: {
-            label: 'RIVAL',   approxWpm: 55,
-            botCps: 4.5,   playerSpawnMs: 1500, botSpawnMs: 1700,
-            wordLenMin: 5, wordLenMax: 9,
-            specialWeights: { normal: 0.70, bonus: 0.10, bomb: 0.10, decoy: 0.10 },
+            label: 'RIVAL',   approxWpm: 45,
+            botCps: 3.8,   travelMs: 5500, playerSpawnMs: 2200, botSpawnMs: 2000,
+            maxYouOnScreen: 2, maxCpuOnScreen: 2,
+            wordLenMin: 5, wordLenMax: 8,
+            specialWeights: { normal: 0.74, bonus: 0.10, bomb: 0.10, decoy: 0.06 },
         },
         nemesis: {
-            label: 'NEMESIS', approxWpm: 85,
-            botCps: 7.0,   playerSpawnMs: 1200, botSpawnMs: 1400,
+            label: 'NEMESIS', approxWpm: 80,
+            botCps: 6.5,   travelMs: 4200, playerSpawnMs: 1500, botSpawnMs: 1400,
+            maxYouOnScreen: 3, maxCpuOnScreen: 3,
             wordLenMin: 6, wordLenMax: 11,
             specialWeights: { normal: 0.55, bonus: 0.10, bomb: 0.20, twin: 0.10, decoy: 0.05 },
         },
@@ -4421,7 +4432,6 @@ const Versus = (() => {
     const MAX_LIVES = 4;
     const PLAYER_SAFE_X_FRAC = 0.18;
     const BOT_SAFE_X_FRAC    = 0.82;
-    const WORD_TRAVEL_MS_BASE = 6000;
     const POWERUP_FREEZE_MS = 18000;
     const POWERUP_SHIELD_MS = 25000;
 
@@ -4494,7 +4504,11 @@ const Versus = (() => {
         const y = clampY(80 + Math.random() * (game.h - 240));
         const target = owner === 'you' ? state.you : state.cpu;
         const dist = Math.abs(shieldX(target) - x);
-        const dur = WORD_TRAVEL_MS_BASE * (1500 / Math.max(700, tier.botSpawnMs));
+        // Travel duration is now an explicit per-tier knob (was derived from
+        // botSpawnMs which conflated cadence with speed). Bombs and decoys
+        // travel slightly faster / slower respectively for variety.
+        const typeMul = w_type_dur_mul(type);
+        const dur = tier.travelMs * typeMul;
         const vx = (fromRight ? -1 : 1) * (dist / dur);
         const w = {
             owner, type, text, typed: 0,
@@ -4508,6 +4522,12 @@ const Versus = (() => {
         state.words.push(w);
     }
     function clampY(y) { return Math.max(80, Math.min(game.h - 100, y)); }
+    function w_type_dur_mul(type) {
+        // Bombs are scarier when they're slightly faster; decoys saunter.
+        if (type === 'bomb')  return 0.85;
+        if (type === 'decoy') return 1.10;
+        return 1;
+    }
 
     function planBotCompletion(w, tier) {
         const lenFactor = 0.85 + (w.text.length / 8) * 0.5;
@@ -4526,8 +4546,12 @@ const Versus = (() => {
         state.words = [];
         state.particles = [];
         state.floaters = [];
-        state.spawnYou = 600;
-        state.spawnCpu = 1100;
+        // Brief breather before words start arriving so the player can read
+        // hearts / shields / their input area. Scales with tier — rookie
+        // gets the longest wind-up.
+        const tierCfg = TIERS[state.tier];
+        state.spawnYou = tierCfg.playerSpawnMs * 0.45;
+        state.spawnCpu = tierCfg.botSpawnMs * 0.65;
         state.elapsed = 0;
         state.startedAt = performance.now();
         state.winner = null;
@@ -4569,8 +4593,19 @@ const Versus = (() => {
 
         state.spawnYou -= dt;
         state.spawnCpu -= dt;
-        if (state.spawnYou <= 0) { spawnWord('you', tier); state.spawnYou = tier.playerSpawnMs * (0.75 + Math.random() * 0.5); }
-        if (state.spawnCpu <= 0) { spawnWord('cpu', tier); state.spawnCpu = tier.botSpawnMs    * (0.75 + Math.random() * 0.5); }
+        // Concurrency caps: keep ROOKIE to one word at a time so it feels
+        // genuinely teaching-pace. Cap reached → cooldown stays at 0 and
+        // next frame retries — spawn fires the moment a word is destroyed.
+        const youOnScreen = state.words.reduce((n, w) => n + (w.owner === 'you' && !w._dead ? 1 : 0), 0);
+        const cpuOnScreen = state.words.reduce((n, w) => n + (w.owner === 'cpu' && !w._dead ? 1 : 0), 0);
+        if (state.spawnYou <= 0 && youOnScreen < tier.maxYouOnScreen) {
+            spawnWord('you', tier);
+            state.spawnYou = tier.playerSpawnMs * (0.85 + Math.random() * 0.3);
+        }
+        if (state.spawnCpu <= 0 && cpuOnScreen < tier.maxCpuOnScreen) {
+            spawnWord('cpu', tier);
+            state.spawnCpu = tier.botSpawnMs * (0.85 + Math.random() * 0.3);
+        }
 
         for (const side of [state.you, state.cpu]) {
             if (side.freezeTimer > 0) side.freezeTimer = Math.max(0, side.freezeTimer - dt);
