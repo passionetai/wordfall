@@ -1242,16 +1242,31 @@ function pickBossText() {
     return pool[rngInt(pool.length)];
 }
 
+// Boss tier: 0 at L5, 1 at L10, 2 at L15, … Drives every escalation knob.
+function bossTier(level) { return Math.max(0, Math.floor((level - 5) / 5)); }
+
 function bossSpeedForLevel(level) {
-    // Was: baseFallSpeed() * 0.5
-    // Now: 0.5 at L5, +0.04 per boss tier (capped to ~1.1× baseFallSpeed).
-    const tier = Math.max(0, Math.floor((level - 5) / 5));
-    return baseFallSpeed() * Math.min(1.1, 0.5 + tier * 0.08);
+    // Falls faster every tier so later bosses demand higher real WPM.
+    // 0.5× baseFallSpeed at L5 → capped at 1.4× by L40.
+    const tier = bossTier(level);
+    return baseFallSpeed() * Math.min(1.4, 0.5 + tier * 0.12);
 }
 
 function bossSizeMultiplierForLevel(level) {
     // 2.5× at L5, growing modestly so later bosses feel more imposing.
     return Math.min(3.4, 2.5 + Math.max(0, level - 5) * 0.04);
+}
+
+// Milliseconds allowed per boss letter. Generous on the first boss, tighter
+// each tier — this is the "you can't stall" countdown budget.
+function bossPerLetterMs(level) {
+    return Math.max(420, 900 - bossTier(level) * 160);
+}
+
+// Idle window (ms) before an unfinished boss starts regrowing letters.
+// Disabled below L10; tightens each tier after that.
+function bossRegrowIdleMs(level) {
+    return Math.max(1000, 2200 - bossTier(level) * 300);
 }
 
 function spawnBoss() {
@@ -1271,6 +1286,7 @@ function spawnBoss() {
         xCursor += lw;
     }
     const startX = game.w / 2 - totalWidth / 2;
+    const timeLimit = text.length * bossPerLetterMs(game.level);
     const boss = {
         text, typed: 0, x: game.w / 2, y: -100,
         speed: bossSpeedForLevel(game.level),
@@ -1279,6 +1295,11 @@ function spawnBoss() {
         wiggle: 0, spawnAt: performance.now(),
         type: 'boss',
         letters, startX,
+        // Step-4 difficulty: hard countdown + letter regrowth on stall.
+        timeLimit, timeLeft: timeLimit,
+        idleT: 0,
+        regrowEnabled: game.level >= 10,
+        regrowIdleMs: bossRegrowIdleMs(game.level),
     };
     game.words.push(boss);
     game.bossActive = boss;
@@ -1316,6 +1337,7 @@ function bossDefeated(boss) {
 
 function bossEscaped(boss) {
     // -2 lives, heavy red flash, scaled-up miss treatment.
+    showToast('BOSS ESCAPED  -2', '#FF1744');
     game.combo = 0; game.multiplier = 1; game.comboTimer = 0;
     const lossCount = Math.min(2, game.lives);
     for (let i = 0; i < lossCount; i++) {
@@ -1442,6 +1464,7 @@ function onKey(e) {
                 // Per-letter score reward
                 game.score += Math.round(10 * 5 * game.multiplier);
             }
+            game.target.idleT = 0; // progress made — reset the regrow clock
         } else {
             spawnBullet(game.target);
             Audio.keyHit(game.target.typed / game.target.text.length);
@@ -1909,6 +1932,34 @@ function update(dt) {
         updateFloaters(dt);
         decayVisualState(dt);
         return;
+    }
+
+    // Boss fight: hard countdown + letter regrowth (you can't stall).
+    // Both tick on scaled time, so a FREEZE power-up genuinely helps vs a
+    // boss — it slows the countdown and delays regrowth.
+    if (game.bossState === 'fighting' && game.bossActive) {
+        const boss = game.bossActive;
+        boss.timeLeft -= sdt;
+        boss.idleT += sdt;
+        if (boss.regrowEnabled && boss.typed > 0 && boss.typed < boss.text.length
+            && boss.idleT >= boss.regrowIdleMs) {
+            // Idling too long → the most recently shattered letter regrows.
+            const li = boss.letters[boss.typed - 1];
+            if (li) {
+                li.alive = true;
+                li.shatterT = 0;
+                li.regrowT = 280;
+                boss.typed--;
+                boss.idleT = 0;
+                game.flash = Math.max(game.flash, 0.22); game.flashColor = '#FF8A00';
+                game.shake = Math.max(game.shake, 5);
+                renderInput();
+            }
+        }
+        if (boss.timeLeft <= 0) {
+            bossEscaped(boss);
+            return;
+        }
     }
 
     // Spawning
@@ -2398,11 +2449,24 @@ function drawBossWord(ctx, boss) {
     ctx.textAlign = 'left';
     ctx.lineJoin = 'round';
     const y = boss.y;
+    // When the countdown is low, the whole boss pulses toward danger red.
+    const frac = boss.timeLimit > 0 ? Math.max(0, Math.min(1, boss.timeLeft / boss.timeLimit)) : 1;
+    const lowTime = frac < 0.25;
     for (const li of boss.letters) {
         if (!li.alive) continue;
         const x = boss.startX + li.cx - li.w / 2;
-        // Heavy 3-pass with mega glow
-        drawWordSegment(ctx, li.ch, x, y, '#FF2E97', '#FF2E97', 30, false);
+        let col = '#FF2E97', glowCol = '#FF2E97', glow = 30;
+        if (li.regrowT && li.regrowT > 0) {
+            // Just regrew — orange flash that fades back.
+            col = '#FF8A00'; glowCol = '#FF8A00'; glow = 34;
+        } else if (lowTime) {
+            const pulse = 0.5 + 0.5 * Math.sin(t * 0.02);
+            col = pulse > 0.5 ? '#FF1744' : '#FF2E97';
+            glowCol = '#FF1744';
+            glow = 36;
+        }
+        drawWordSegment(ctx, li.ch, x, y, col, glowCol, glow, false);
+        if (li.regrowT && li.regrowT > 0) li.regrowT = Math.max(0, li.regrowT - 16);
     }
     ctx.restore();
 }
@@ -2623,29 +2687,59 @@ function drawBossProgressBar(ctx, rightX, topY) {
     const boss = game.bossActive;
     const remaining = boss.text.length - boss.typed;
     const barW = Math.round(game.w * 0.18);
-    const barH = 10;
     const x = rightX - barW;
-    const y = topY;
-    // Frame
+    const t = performance.now();
+
+    // --- Letters-typed progress bar (cyan) ---
+    const pH = 8;
+    let y = topY;
     ctx.fillStyle = '#0A0E1A';
     ctx.strokeStyle = '#FF2E97';
     ctx.lineWidth = 1;
-    roundRect(ctx, x, y, barW, barH, 3);
+    roundRect(ctx, x, y, barW, pH, 3);
     ctx.fill();
     ctx.stroke();
-    // Fill
     const filled = boss.typed / boss.text.length;
     if (filled > 0) {
         ctx.fillStyle = '#00F0FF';
-        roundRect(ctx, x + 2, y + 2, (barW - 4) * filled, barH - 4, 2);
+        roundRect(ctx, x + 2, y + 2, (barW - 4) * filled, pH - 4, 2);
         ctx.fill();
     }
-    // Label below
-    ctx.font = "400 14px VT323, monospace";
-    ctx.fillStyle = '#F0F4FF';
+
+    // --- Countdown timer bar (cyan → gold → red as it drains) ---
+    const tH = 6;
+    y = topY + pH + 4;
+    const frac = boss.timeLimit > 0 ? Math.max(0, Math.min(1, boss.timeLeft / boss.timeLimit)) : 0;
+    const low = frac < 0.25;
+    const timerCol = frac > 0.5 ? '#00F0FF' : (frac > 0.25 ? '#FFD93D' : '#FF1744');
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, x, y, barW, tH, 3);
+    ctx.fill();
+    ctx.stroke();
+    if (frac > 0) {
+        const pulse = low ? (0.6 + 0.4 * (0.5 + 0.5 * Math.sin(t * 0.02))) : 1;
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = timerCol;
+        roundRect(ctx, x + 1, y + 1, (barW - 2) * frac, tH - 2, 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+    }
+
+    // --- Label: letters left + seconds remaining ---
+    const secs = Math.max(0, boss.timeLeft / 1000);
+    ctx.font = "400 13px VT323, monospace";
     ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
-    ctx.fillText(`BOSS: ${remaining} LETTERS LEFT`, rightX, y + barH + 4);
+    ctx.fillStyle = '#F0F4FF';
+    ctx.fillText(`BOSS · ${remaining} LEFT`, rightX, y + tH + 3);
+    // seconds, colour-coded, on the left of the same line
+    ctx.textAlign = 'left';
+    ctx.fillStyle = timerCol;
+    if (low) { ctx.shadowColor = '#FF1744'; ctx.shadowBlur = 8; }
+    ctx.fillText(`${secs.toFixed(1)}s`, x, y + tH + 3);
+    ctx.shadowBlur = 0;
     return barW;
 }
 
