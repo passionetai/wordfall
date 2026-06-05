@@ -1336,6 +1336,20 @@ function bossEscaped(boss) {
 // ---------- Input ----------
 function onKey(e) {
     if (e.key === 'Escape') {
+        // If any overlay-modal is open, Esc closes the topmost one. We check
+        // the confirm dialog first (deepest), then daily-played, then stats,
+        // then settings. The tutorial deliberately doesn't close on Esc —
+        // it has its own Skip button so first-time players don't dismiss it
+        // by accident.
+        const tryClose = (id) => {
+            const el = document.getElementById(id);
+            if (el && el.classList.contains('show')) { hide(id); return true; }
+            return false;
+        };
+        if (tryClose('confirm-reset') || tryClose('daily-played')
+            || tryClose('stats-modal') || tryClose('settings-modal')) {
+            return;
+        }
         if (game.state === 'playing') {
             game.state = 'paused';
             document.getElementById('pause-hint').classList.add('show');
@@ -3426,6 +3440,10 @@ function wireStep4DOM() {
     document.getElementById('stats-close').addEventListener('click', () => hide('stats-modal'));
     // Daily-played modal
     document.getElementById('dp-close-btn').addEventListener('click', () => hide('daily-played'));
+    const dpX = document.getElementById('dp-close-x');
+    if (dpX) dpX.addEventListener('click', () => hide('daily-played'));
+    const cfX = document.getElementById('confirm-close-x');
+    if (cfX) cfX.addEventListener('click', () => hide('confirm-reset'));
     document.getElementById('dp-share-btn').addEventListener('click', () => {
         const r = getDailyResult();
         if (!r) return;
