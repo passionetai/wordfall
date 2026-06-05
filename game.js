@@ -1373,18 +1373,22 @@ function onKey(e) {
         if (game.target) { game.target = null; game.input = ''; renderInput(); }
         return;
     }
+    // Power-up activation: Shift + F / B / S. A modifier removes the old
+    // ambiguity with typing words that start with those letters, so plain
+    // f / b / s are now always free for gameplay. Works any time during play.
+    if (e.shiftKey && /^[fbs]$/i.test(e.key)) {
+        const k = e.key.toLowerCase();
+        if      (k === 'f' && game.powerups.freeze > 0) usePowerup('freeze');
+        else if (k === 'b' && game.powerups.bomb   > 0) usePowerup('bomb');
+        else if (k === 's' && game.powerups.shield > 0) usePowerup('shield');
+        // Reserved gesture — swallow even when uncharged so the capital
+        // letter never leaks into word typing.
+        e.preventDefault();
+        return;
+    }
+
     if (e.key.length !== 1 || !/[a-zA-Z]/.test(e.key)) return;
     const ch = e.key.toLowerCase();
-
-    // Power-up hotkeys: only when no target and no candidate first-letter match.
-    if (!game.target) {
-        const hasCandidate = lockOnCandidates().some(wd => wd.text[0] === ch);
-        if (!hasCandidate) {
-            if (ch === 'f' && game.powerups.freeze > 0) { usePowerup('freeze'); return; }
-            if (ch === 'b' && game.powerups.bomb   > 0) { usePowerup('bomb');   return; }
-            if (ch === 's' && game.powerups.shield > 0) { usePowerup('shield'); return; }
-        }
-    }
 
     if (!game.target) {
         const candidates = lockOnCandidates();
@@ -2703,11 +2707,12 @@ function drawPowerupSlots(ctx, x0, y0, totalW) {
             ctx.shadowBlur = 0;
         }
 
+        // Hotkey label now shows the Shift combo (⇧F / ⇧B / ⇧S).
         ctx.font = '14px VT323, monospace';
-        ctx.fillStyle = '#F0F4FF';
+        ctx.fillStyle = '#9fb0d8';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        ctx.fillText(hotkeys[kind], x + sz / 2, y + sz + 2);
+        ctx.fillText('⇧' + hotkeys[kind], x + sz / 2, y + sz + 2);
 
         if (game.powerups[kind] > 1) {
             ctx.font = "700 12px Inter, sans-serif";
@@ -3627,7 +3632,7 @@ const Tutorial = (() => {
         },
         {
             title: 'USE POWER-UPS',
-            body: 'Press F to FREEZE time, B to BOMB the screen, S to SHIELD a miss.',
+            body: 'Hold SHIFT + F to FREEZE time, SHIFT + B to BOMB the screen, SHIFT + S to SHIELD a miss. (On touch, tap the icons.)',
             draw: drawDemoPowerups,
         },
         {
@@ -3774,12 +3779,13 @@ const Tutorial = (() => {
     }
     function drawDemoPowerups(ctx, w, h, t) {
         const labels = ['F', 'B', 'S'];
+        const combos = ['SHIFT+F', 'SHIFT+B', 'SHIFT+S'];
         const names = ['FREEZE', 'BOMB', 'SHIELD'];
         const sz = 64;
         const gap = 30;
         const total = labels.length * sz + (labels.length - 1) * gap;
         const x0 = (w - total) / 2;
-        const y0 = h / 2 - sz / 2;
+        const y0 = h / 2 - sz / 2 - 6;
         labels.forEach((ltr, i) => {
             const x = x0 + i * (sz + gap);
             const pulse = 0.7 + 0.3 * Math.sin(t / 400 + i);
@@ -3800,9 +3806,13 @@ const Tutorial = (() => {
             ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 10;
             ctx.fillText(ltr, x + sz / 2, y0 + sz / 2 + 1);
             ctx.shadowBlur = 0;
-            ctx.font = "12px VT323, monospace";
-            ctx.fillStyle = '#F0F4FF';
-            ctx.fillText(names[i], x + sz / 2, y0 + sz + 14);
+            // Combo line (SHIFT+X) then power-up name.
+            ctx.font = "13px VT323, monospace";
+            ctx.fillStyle = '#00F0FF';
+            ctx.fillText(combos[i], x + sz / 2, y0 + sz + 14);
+            ctx.font = "11px VT323, monospace";
+            ctx.fillStyle = '#6B7299';
+            ctx.fillText(names[i], x + sz / 2, y0 + sz + 30);
             ctx.restore();
         });
     }
