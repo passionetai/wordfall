@@ -4134,6 +4134,12 @@ const Tutorial = (() => {
 // Step 5 — Play button gating (tutorial on first launch)
 // ====================================================================
 function onPlayClicked() {
+    // Versus is a separate mode — Play opens its tier picker instead of
+    // dropping into the single-player loop.
+    if (game.mode === 'versus') {
+        Versus.openPicker();
+        return;
+    }
     const done = localStorage.getItem('wordfall_tutorial_completed') === 'true';
     if (!done) {
         Tutorial.open((skipped) => { startGame(); });
@@ -4383,6 +4389,713 @@ function populateSettingsModal() {
         if (el) el.checked = !!v;
     });
 }
+
+// ====================================================================
+// Versus mode — you vs CPU bot
+//   Phase 1: bilateral defense duel. Words spawn on each side flying
+//   toward that side's shield; both players type to defend; whoever
+//   loses all hearts first loses the match. The bot 'types' at a
+//   tier-controlled CPS. Phase 2 will add player-launched attack racks.
+// ====================================================================
+const Versus = (() => {
+    const TIERS = {
+        rookie: {
+            label: 'ROOKIE',  approxWpm: 30,
+            botCps: 2.5,   playerSpawnMs: 1800, botSpawnMs: 2100,
+            wordLenMin: 4, wordLenMax: 7,
+            specialWeights: { normal: 0.85, bonus: 0.10, decoy: 0.05 },
+        },
+        rival: {
+            label: 'RIVAL',   approxWpm: 55,
+            botCps: 4.5,   playerSpawnMs: 1500, botSpawnMs: 1700,
+            wordLenMin: 5, wordLenMax: 9,
+            specialWeights: { normal: 0.70, bonus: 0.10, bomb: 0.10, decoy: 0.10 },
+        },
+        nemesis: {
+            label: 'NEMESIS', approxWpm: 85,
+            botCps: 7.0,   playerSpawnMs: 1200, botSpawnMs: 1400,
+            wordLenMin: 6, wordLenMax: 11,
+            specialWeights: { normal: 0.55, bonus: 0.10, bomb: 0.20, twin: 0.10, decoy: 0.05 },
+        },
+    };
+    const MAX_LIVES = 4;
+    const PLAYER_SAFE_X_FRAC = 0.18;
+    const BOT_SAFE_X_FRAC    = 0.82;
+    const WORD_TRAVEL_MS_BASE = 6000;
+    const POWERUP_FREEZE_MS = 18000;
+    const POWERUP_SHIELD_MS = 25000;
+
+    const state = {
+        active: false,
+        tier: 'rookie',
+        you: null, cpu: null,
+        words: [],
+        particles: [],
+        floaters: [],
+        spawnYou: 0,
+        spawnCpu: 0,
+        elapsed: 0,
+        startedAt: 0,
+        winner: null,
+        endingT: 0,
+        shake: 0, flash: 0, flashColor: '#ff5a6e',
+    };
+
+    function makeSide(which) {
+        return {
+            which,
+            lives: MAX_LIVES,
+            heartFx: [],
+            target: null,
+            input: '',
+            combo: 0, combo_best: 0, multiplier: 1, comboTimer: 0,
+            charsTyped: 0, wordsTyped: 0,
+            freezeTimer: 0, shieldTimer: 0,
+            powerups: { freeze: 0, shield: 0 },
+        };
+    }
+
+    function shieldX(side) {
+        return side.which === 'you'
+            ? game.w * PLAYER_SAFE_X_FRAC
+            : game.w * BOT_SAFE_X_FRAC;
+    }
+
+    function pickText(tier) {
+        if (DeepSeek && DeepSeek.hasKey && DeepSeek.hasKey()) {
+            const w = DeepSeek.take && DeepSeek.take();
+            DeepSeek.refill && DeepSeek.refill(8).catch(() => {});
+            if (w && w.length >= tier.wordLenMin && w.length <= tier.wordLenMax + 2) return w;
+        }
+        const pool = (WORDS.tier1.concat(WORDS.tier2, WORDS.tier3, WORDS.tier4))
+            .filter(w => w.length >= tier.wordLenMin && w.length <= tier.wordLenMax);
+        if (pool.length === 0) return 'word';
+        return pool[(Math.random() * pool.length) | 0];
+    }
+
+    function pickType(weights) {
+        const total = Object.values(weights).reduce((a, b) => a + b, 0);
+        let r = Math.random() * total;
+        for (const k of Object.keys(weights)) {
+            r -= weights[k];
+            if (r <= 0) return k;
+        }
+        return 'normal';
+    }
+
+    function spawnWord(owner, tier) {
+        const type = pickType(tier.specialWeights);
+        const text = pickText(tier);
+        const fontSize = 24 + Math.max(0, 12 - text.length) * 1.4;
+        game.ctx.font = `400 ${fontSize}px 'VT323', monospace`;
+        const width = game.ctx.measureText(text).width;
+        const fromRight = owner === 'you';
+        const x = fromRight ? game.w + width / 2 + 20 : -width / 2 - 20;
+        const y = clampY(80 + Math.random() * (game.h - 240));
+        const target = owner === 'you' ? state.you : state.cpu;
+        const dist = Math.abs(shieldX(target) - x);
+        const dur = WORD_TRAVEL_MS_BASE * (1500 / Math.max(700, tier.botSpawnMs));
+        const vx = (fromRight ? -1 : 1) * (dist / dur);
+        const w = {
+            owner, type, text, typed: 0,
+            x, y, vx, size: fontSize, width,
+            hue: 200 + Math.random() * 160,
+            wiggle: Math.random() * Math.PI * 2,
+            spawnAt: performance.now(),
+            bot: null,
+        };
+        if (owner === 'cpu') planBotCompletion(w, tier);
+        state.words.push(w);
+    }
+    function clampY(y) { return Math.max(80, Math.min(game.h - 100, y)); }
+
+    function planBotCompletion(w, tier) {
+        const lenFactor = 0.85 + (w.text.length / 8) * 0.5;
+        const adj = tier.botCps * lenFactor * (w.type === 'decoy' ? 0.3 : 1);
+        const fumble = Math.random() < 0.07 ? 0.6 : 0;
+        const sec = (w.text.length / Math.max(1.2, adj)) + fumble;
+        const startedAt = performance.now() + 280;
+        w.bot = { cps: adj, startedAt, completionAt: startedAt + sec * 1000, fumbled: fumble > 0 };
+    }
+
+    function start(tier) {
+        state.active = true;
+        state.tier = tier;
+        state.you = makeSide('you');
+        state.cpu = makeSide('cpu');
+        state.words = [];
+        state.particles = [];
+        state.floaters = [];
+        state.spawnYou = 600;
+        state.spawnCpu = 1100;
+        state.elapsed = 0;
+        state.startedAt = performance.now();
+        state.winner = null;
+        state.endingT = 0;
+        state.shake = 0; state.flash = 0;
+        game.state = 'versus';
+        if (typeof AmbientLetters !== 'undefined') AmbientLetters.stop();
+        AudioManager.setActiveMusic('game');
+        hide('menu'); hide('versus-setup'); hide('versus-over');
+        Audio.resume();
+        if (DeepSeek && DeepSeek.hasKey && DeepSeek.hasKey()) {
+            DeepSeek.refill && DeepSeek.refill(8).catch(() => {});
+        }
+    }
+    function end(winner) {
+        if (state.winner) return;
+        state.winner = winner;
+        state.endingT = 1100;
+        state.shake = 22; state.flash = 0.5;
+        state.flashColor = winner === 'you' ? '#00FF9F' : '#FF1744';
+        Audio.gameOver();
+    }
+
+    function update(dt) {
+        if (!state.active) return;
+        state.elapsed += dt;
+        const tier = TIERS[state.tier];
+
+        if (state.winner) {
+            state.endingT -= dt;
+            const ov = document.getElementById('versus-over');
+            if (state.endingT <= 0 && ov && !ov.classList.contains('show')) showResult();
+            for (const w of state.words) { w.x += w.vx * dt; w.wiggle += dt * 0.005; }
+            updateParticlesAndFloaters(dt);
+            state.shake = Math.max(0, state.shake - dt * 0.05);
+            state.flash = Math.max(0, state.flash - dt * 0.003);
+            return;
+        }
+
+        state.spawnYou -= dt;
+        state.spawnCpu -= dt;
+        if (state.spawnYou <= 0) { spawnWord('you', tier); state.spawnYou = tier.playerSpawnMs * (0.75 + Math.random() * 0.5); }
+        if (state.spawnCpu <= 0) { spawnWord('cpu', tier); state.spawnCpu = tier.botSpawnMs    * (0.75 + Math.random() * 0.5); }
+
+        for (const side of [state.you, state.cpu]) {
+            if (side.freezeTimer > 0) side.freezeTimer = Math.max(0, side.freezeTimer - dt);
+            if (side.shieldTimer > 0) {
+                side.shieldTimer -= dt;
+                if (side.shieldTimer <= 0) { side.shieldTimer = 0; showToast(side.which === 'you' ? 'SHIELD DOWN' : 'BOT SHIELD DOWN', '#FF8A00'); }
+            }
+            for (const fx of side.heartFx) fx.life -= dt;
+            side.heartFx = side.heartFx.filter(fx => fx.life > 0);
+            if (side.combo > 0) {
+                side.comboTimer -= dt;
+                if (side.comboTimer <= 0) { side.combo = 0; side.multiplier = 1; }
+            }
+        }
+
+        const now = performance.now();
+        for (const w of state.words) {
+            const ownerSide = w.owner === 'you' ? state.you : state.cpu;
+            const ts = ownerSide.freezeTimer > 0 ? 0.35 : 1;
+            w.x += w.vx * dt * ts;
+            w.wiggle += dt * 0.004;
+
+            if (w.owner === 'cpu' && w.bot && !w.botDone) {
+                const skipDecoy = w.type === 'decoy'
+                    ? Math.random() < ({ rookie: 0.55, rival: 0.78, nemesis: 0.94 })[state.tier]
+                    : false;
+                if (!skipDecoy && now >= w.bot.completionAt) {
+                    botDefend(w);
+                }
+            }
+
+            const reachedShield = w.owner === 'you'
+                ? (w.x <= shieldX(state.you) + 4)
+                : (w.x >= shieldX(state.cpu) - 4);
+            if (reachedShield) landHit(w);
+        }
+        state.words = state.words.filter(w => !w._dead);
+        updateParticlesAndFloaters(dt);
+        state.shake = Math.max(0, state.shake - dt * 0.05);
+        state.flash = Math.max(0, state.flash - dt * 0.003);
+    }
+
+    function updateParticlesAndFloaters(dt) {
+        for (const p of state.particles) {
+            p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 0.0002 * dt; p.life -= dt;
+        }
+        state.particles = state.particles.filter(p => p.life > 0);
+        for (const f of state.floaters) {
+            f.y += f.vy * dt; f.life -= dt;
+        }
+        state.floaters = state.floaters.filter(f => f.life > 0);
+    }
+
+    function botDefend(w) {
+        w._dead = true; w.botDone = true;
+        explodeAtVs(w.x, w.y, 'cyan', 20);
+        state.cpu.charsTyped += w.text.length;
+        state.cpu.wordsTyped++;
+        if (w.type === 'bonus' && Math.random() < 0.5) {
+            state.spawnYou = Math.max(300, state.spawnYou * 0.7);
+        }
+    }
+
+    function landHit(w) {
+        if (w._dead) return;
+        w._dead = true;
+        const defender = w.owner === 'you' ? state.you : state.cpu;
+        const damage = w.type === 'bomb' ? 2 : 1;
+        if (defender.shieldTimer > 0) {
+            defender.shieldTimer = 0;
+            showToast(defender.which === 'you' ? 'SHIELD BROKE' : 'BOT SHIELD BROKE', '#FF8A00');
+            explodeAtVs(w.x, w.y, 'cyan', 14);
+            return;
+        }
+        for (let i = 0; i < damage && defender.lives > 0; i++) {
+            defender.lives--;
+            defender.heartFx.push({ idx: defender.lives, life: 500 });
+        }
+        defender.combo = 0; defender.multiplier = 1; defender.comboTimer = 0;
+        state.shake = Math.max(state.shake, defender.which === 'you' ? 16 : 12);
+        state.flash = Math.max(state.flash, 0.4);
+        state.flashColor = defender.which === 'you' ? '#FF1744' : '#00FF9F';
+        explodeAtVs(w.x, w.y, w.type === 'bomb' ? 'redmagenta' : 'cyan', w.type === 'bomb' ? 60 : 24);
+        Audio.miss();
+        if (defender.lives <= 0) end(defender.which === 'you' ? 'cpu' : 'you');
+    }
+
+    function onKey(e) {
+        if (!state.active || state.winner) return false;
+        if (e.key === 'Escape') { end('cpu'); return true; }
+        if (e.shiftKey && /^[fs]$/i.test(e.key)) {
+            const k = e.key.toLowerCase();
+            if (k === 'f' && state.you.powerups.freeze > 0) useVsPowerup('freeze');
+            else if (k === 's' && state.you.powerups.shield > 0) useVsPowerup('shield');
+            e.preventDefault();
+            return true;
+        }
+        if (e.key === 'Backspace') {
+            if (state.you.target) { state.you.target = null; state.you.input = ''; }
+            return true;
+        }
+        if (e.key.length !== 1 || !/[a-zA-Z]/.test(e.key)) return false;
+        const ch = e.key.toLowerCase();
+        const candidates = state.words.filter(w => w.owner === 'you' && !w._dead);
+        if (!state.you.target) {
+            let best = null, bestDecoy = null;
+            for (const w of candidates) {
+                if (w.text[0] !== ch) continue;
+                if (w.type === 'decoy') { if (!bestDecoy || bestDecoy.x > w.x) bestDecoy = w; }
+                else { if (!best || best.x > w.x) best = w; }
+            }
+            if (!best) best = bestDecoy;
+            if (!best) return true;
+            state.you.target = best;
+            best.typed = 1;
+            state.you.input = ch;
+            state.you.charsTyped++;
+            AudioManager.playSFX('lock', () => {}, { volume: 0.8 });
+            AudioManager.playSFX('type', () => {}, { volume: 0.3, playbackRate: 0.92 + Math.random() * 0.16 });
+            if (best.typed === best.text.length) playerComplete(best);
+            return true;
+        }
+        const expected = state.you.target.text[state.you.target.typed];
+        if (ch === expected) {
+            state.you.target.typed++;
+            state.you.input = state.you.target.text.slice(0, state.you.target.typed);
+            state.you.charsTyped++;
+            AudioManager.playSFX('type', () => {}, { volume: 0.3, playbackRate: 0.92 + Math.random() * 0.16 });
+            if (state.you.target.typed === state.you.target.text.length) playerComplete(state.you.target);
+        } else {
+            if (state.you.combo > 2) state.you.combo = Math.max(0, state.you.combo - 1);
+        }
+        return true;
+    }
+
+    function playerComplete(w) {
+        if (w.type === 'decoy') {
+            state.you.combo = 0; state.you.multiplier = 1; state.you.comboTimer = 0;
+            showToast('BAIT', '#FF8A00');
+            state.flash = Math.max(state.flash, 0.3); state.flashColor = '#FF8A00';
+            explodeAtVs(w.x, w.y, 'cyan', 12);
+            w._dead = true;
+            state.you.target = null; state.you.input = '';
+            return;
+        }
+        w._dead = true;
+        state.you.target = null; state.you.input = '';
+        state.you.wordsTyped++;
+        state.you.combo++;
+        if (state.you.combo > state.you.combo_best) state.you.combo_best = state.you.combo;
+        state.you.multiplier = 1 + Math.min(state.you.combo, 50) * 0.1;
+        state.you.comboTimer = 3200;
+        if (w.type === 'bonus') {
+            const counts = state.you.powerups;
+            const kinds = ['freeze', 'shield'];
+            let minK = kinds[0];
+            for (const k of kinds) if (counts[k] < counts[minK]) minK = k;
+            state.you.powerups[minK]++;
+            showToast(`POWER-UP: ${minK.toUpperCase()}`, '#FFD93D');
+            explodeAtVs(w.x, w.y, 'gold', 36);
+        } else {
+            explodeAtVs(w.x, w.y, 'cyan', 22);
+        }
+        AudioManager.playSFX('destroy', () => {}, { volume: 0.8 });
+        if (w.type === 'bomb') {
+            explodeAtVs(w.x, w.y, 'redmagenta', 30);
+            showToast('BOMB DEFUSED', '#00FF9F');
+        }
+    }
+
+    function useVsPowerup(kind) {
+        state.you.powerups[kind]--;
+        if (kind === 'freeze') {
+            state.you.freezeTimer = POWERUP_FREEZE_MS;
+            showToast(`FREEZE  ${POWERUP_FREEZE_MS / 1000}s`, '#00F0FF');
+        } else if (kind === 'shield') {
+            state.you.shieldTimer = POWERUP_SHIELD_MS;
+            showToast(`SHIELD UP  ${POWERUP_SHIELD_MS / 1000}s`, '#00FF9F');
+        }
+        Audio.powerup(kind);
+    }
+
+    function showResult() {
+        const tier = TIERS[state.tier];
+        const winYou = state.winner === 'you';
+        const mins = state.elapsed / 60000;
+        const yourWpm = mins > 0 ? Math.round((state.you.charsTyped / 5) / mins) : 0;
+        const botWpm  = mins > 0 ? Math.round((state.cpu.charsTyped / 5) / mins) : 0;
+        const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+        set('vs-result-eyebrow', winYou ? 'YOU WIN' : 'YOU LOSE');
+        set('vs-result-title', winYou ? 'VICTORY' : 'DEFEATED');
+        set('vs-result-tier', tier.label);
+        set('vs-result-wpm', String(yourWpm));
+        set('vs-result-bot-wpm', String(botWpm));
+        show('versus-over');
+    }
+
+    function draw(ctx) {
+        if (!state.active) return;
+        const w = game.w, h = game.h;
+        ctx.save();
+        if (state.shake > 0) ctx.translate((Math.random() - 0.5) * state.shake, (Math.random() - 0.5) * state.shake);
+
+        if (Assets.bgSkyline) {
+            const img = Assets.bgSkyline;
+            const ir = img.width / img.height, cr = w / h;
+            let dw, dh, dx, dy;
+            if (ir > cr) { dh = h; dw = h * ir; dx = (w - dw) / 2; dy = 0; }
+            else         { dw = w; dh = w / ir; dx = 0; dy = (h - dh) / 2; }
+            ctx.drawImage(img, dx, dy, dw, dh);
+            ctx.fillStyle = 'rgba(10, 14, 26, 0.6)';
+            ctx.fillRect(0, 0, w, h);
+        } else {
+            ctx.fillStyle = '#0A0E1A'; ctx.fillRect(0, 0, w, h);
+        }
+        const halfGrad = ctx.createLinearGradient(0, 0, w, 0);
+        halfGrad.addColorStop(0, 'rgba(0, 240, 255, 0.06)');
+        halfGrad.addColorStop(0.5, 'rgba(0, 0, 0, 0)');
+        halfGrad.addColorStop(1, 'rgba(255, 46, 151, 0.06)');
+        ctx.fillStyle = halfGrad;
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([6, 8]);
+        ctx.beginPath(); ctx.moveTo(w / 2, 60); ctx.lineTo(w / 2, h - 30); ctx.stroke();
+        ctx.setLineDash([]);
+
+        drawShield(ctx, state.you);
+        drawShield(ctx, state.cpu);
+
+        for (const word of state.words) drawVsWord(ctx, word);
+
+        for (const p of state.particles) {
+            const a = Math.max(0, p.life / p.max);
+            ctx.globalAlpha = a;
+            ctx.fillStyle = p.kind === 'gold' ? '#FFD93D' : (p.kind === 'magenta' ? '#FF2E97' : (p.kind === 'red' ? '#FF1744' : (p.kind === 'green' ? '#00FF9F' : '#00F0FF')));
+            ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+        }
+        ctx.globalAlpha = 1;
+
+        drawVsHud(ctx);
+
+        if (state.flash > 0) {
+            ctx.fillStyle = withAlpha(state.flashColor, state.flash * 0.45);
+            ctx.fillRect(0, 0, w, h);
+        }
+        if (state.winner) drawEndBanner(ctx);
+        ctx.restore();
+    }
+
+    function drawShield(ctx, side) {
+        const x = shieldX(side);
+        const baseCol = side.which === 'you' ? '#00F0FF' : '#FF2E97';
+        const t = performance.now();
+        const g = ctx.createLinearGradient(x - 30, 0, x + 30, 0);
+        g.addColorStop(0, 'rgba(0,0,0,0)');
+        g.addColorStop(0.5, baseCol + '40');
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(x - 30, 60, 60, game.h - 100);
+        ctx.strokeStyle = side.shieldTimer > 0
+            ? `hsla(${(t * 0.3) % 360}, 90%, 70%, 0.85)`
+            : baseCol;
+        ctx.lineWidth = side.shieldTimer > 0 ? 4 : 2;
+        ctx.beginPath();
+        ctx.moveTo(x, 60);
+        ctx.lineTo(x, game.h - 50);
+        ctx.stroke();
+        if (side.freezeTimer > 0) {
+            ctx.fillStyle = `rgba(0, 240, 255, ${0.06 + 0.05 * Math.sin(t * 0.01)})`;
+            const side_x = side.which === 'you' ? 0 : game.w / 2;
+            ctx.fillRect(side_x, 0, game.w / 2, game.h);
+        }
+    }
+
+    function drawVsWord(ctx, w) {
+        const isTargeted = (state.you.target === w);
+        ctx.save();
+        ctx.font = `${w.size}px VT323, monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineJoin = 'round';
+
+        if (w.type === 'decoy') {
+            const t = performance.now();
+            const alpha = isTargeted ? 0.95 : 0.55 + 0.30 * (0.5 + 0.5 * Math.sin(t / 1500 * 2 * Math.PI));
+            ctx.globalAlpha = alpha;
+            if (isTargeted && w.typed > 0) {
+                const totalW = w.width;
+                const startX = w.x - totalW / 2;
+                ctx.textAlign = 'left';
+                const typed = w.text.slice(0, w.typed);
+                const rest  = w.text.slice(w.typed);
+                const typedW = ctx.measureText(typed).width;
+                drawSeg(ctx, typed, startX, w.y, '#FF8A00', '#FF8A00', 14);
+                drawSeg(ctx, rest,  startX + typedW, w.y, '#9fb0d8', '#9fb0d8', 10);
+                ctx.textAlign = 'center';
+            } else {
+                drawSeg(ctx, w.text, w.x, w.y, '#9fb0d8', '#9fb0d8', 10);
+            }
+            ctx.strokeStyle = isTargeted ? 'rgba(255, 138, 0, 0.85)' : 'rgba(159, 176, 216, 0.7)';
+            ctx.lineWidth = isTargeted ? 2 : 1.5;
+            ctx.beginPath(); ctx.moveTo(w.x - w.width / 2, w.y); ctx.lineTo(w.x + w.width / 2, w.y); ctx.stroke();
+            ctx.globalAlpha = 1;
+            ctx.restore();
+            return;
+        }
+
+        const fillCol = w.type === 'bomb' ? '#FF1744'
+            : w.type === 'bonus' ? '#FFD93D'
+            : w.type === 'twin' ? '#00FF9F'
+            : (w.owner === 'cpu' ? '#FF2E97' : '#F0F4FF');
+        const glowCol = w.type === 'bomb' ? '#FF1744'
+            : w.type === 'bonus' ? '#FFD93D'
+            : w.type === 'twin' ? '#00FF9F'
+            : (w.owner === 'cpu' ? '#FF2E97' : '#00F0FF');
+
+        if (isTargeted && w.typed > 0) {
+            const totalW = w.width;
+            const startX = w.x - totalW / 2;
+            ctx.textAlign = 'left';
+            const typed = w.text.slice(0, w.typed);
+            const rest  = w.text.slice(w.typed);
+            const typedW = ctx.measureText(typed).width;
+            drawSeg(ctx, typed, startX, w.y, '#FFD93D', '#FFD93D', 12);
+            drawSeg(ctx, rest,  startX + typedW, w.y, fillCol, glowCol, 14);
+            ctx.textAlign = 'center';
+        } else {
+            drawSeg(ctx, w.text, w.x, w.y, fillCol, glowCol, isTargeted ? 16 : 8);
+        }
+        ctx.restore();
+    }
+
+    function drawSeg(ctx, str, x, y, fillColor, glowColor, glowBlur) {
+        if (!str) return;
+        ctx.save();
+        ctx.shadowBlur = 22; ctx.shadowColor = '#0A0E1A';
+        ctx.fillStyle = '#0A0E1A';
+        ctx.fillText(str, x, y); ctx.fillText(str, x, y);
+        ctx.restore();
+        ctx.strokeStyle = '#0A0E1A'; ctx.lineWidth = 3; ctx.strokeText(str, x, y);
+        ctx.shadowBlur = glowBlur; ctx.shadowColor = glowColor;
+        ctx.fillStyle = fillColor;
+        ctx.fillText(str, x, y);
+        ctx.shadowBlur = 0;
+    }
+
+    function drawVsHud(ctx) {
+        const w = game.w;
+        ctx.fillStyle = 'rgba(10, 14, 26, 0.75)';
+        ctx.fillRect(0, 0, w, 56);
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.35)';
+        ctx.beginPath(); ctx.moveTo(0, 56.5); ctx.lineTo(w, 56.5); ctx.stroke();
+
+        ctx.font = "400 12px Inter, sans-serif";
+        ctx.fillStyle = '#6B7299'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+        ctx.fillText('YOU', 22, 22);
+        drawHearts(ctx, state.you, 22, 32);
+
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#6B7299';
+        ctx.fillText('CPU · ' + TIERS[state.tier].label, w - 22, 22);
+        drawHearts(ctx, state.cpu, w - 22, 32);
+
+        ctx.textAlign = 'center';
+        ctx.font = "400 18px 'Monoton', Impact, sans-serif";
+        ctx.fillStyle = '#00F0FF';
+        ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 8;
+        ctx.fillText('VERSUS', w / 2, 26);
+        ctx.shadowBlur = 0;
+
+        if (state.you.target) {
+            ctx.font = '400 22px VT323, monospace';
+            ctx.fillStyle = '#FFD93D';
+            ctx.shadowColor = '#FFD93D'; ctx.shadowBlur = 8;
+            ctx.textAlign = 'center';
+            ctx.fillText(state.you.input + '_', w / 4, game.h - 28);
+            ctx.shadowBlur = 0;
+        }
+
+        const pu = state.you.powerups;
+        ctx.font = '400 14px VT323, monospace';
+        ctx.textAlign = 'left';
+        let px = 22; const py = game.h - 22;
+        const drawPu = (label, n, ready) => {
+            ctx.fillStyle = ready ? '#00F0FF' : '#6B7299';
+            const txt = label + (n > 0 ? ' x' + n : '');
+            ctx.fillText(txt, px, py);
+            px += ctx.measureText(txt).width + 14;
+        };
+        drawPu('⇧F FREEZE', pu.freeze, pu.freeze > 0);
+        drawPu('⇧S SHIELD', pu.shield, pu.shield > 0);
+    }
+
+    function drawHearts(ctx, side, anchorX, y) {
+        const max = MAX_LIVES;
+        const spacing = 18;
+        const heartSize = 12;
+        const totalW = (max - 1) * spacing + heartSize;
+        const startX = side.which === 'you'
+            ? anchorX + heartSize / 2
+            : anchorX - totalW + heartSize / 2;
+        for (let i = 0; i < max; i++) {
+            const cx = startX + i * spacing;
+            const lost = i >= side.lives;
+            const fx = side.heartFx.find(h => h.idx === i);
+            let scale = 1, color = side.which === 'you' ? '#00F0FF' : '#FF2E97';
+            if (fx) {
+                const t = 1 - fx.life / 500;
+                scale = 1 + 0.6 * Math.sin(t * Math.PI);
+                color = '#F0F4FF';
+            } else if (lost) {
+                color = side.which === 'you' ? 'rgba(0, 240, 255, 0.18)' : 'rgba(255, 46, 151, 0.18)';
+            }
+            ctx.save();
+            ctx.translate(cx, y);
+            ctx.scale(scale, scale);
+            ctx.fillStyle = color;
+            ctx.shadowColor = color; ctx.shadowBlur = 8;
+            const s = heartSize / 16;
+            ctx.beginPath();
+            ctx.moveTo(0, 5 * s);
+            ctx.bezierCurveTo(0,   2 * s,  -3 * s,  -3 * s,  -6 * s, -3 * s);
+            ctx.bezierCurveTo(-9 * s,  -3 * s, -9 * s,  3 * s,  -9 * s,  3 * s);
+            ctx.bezierCurveTo(-9 * s,  6 * s,  -3 * s,  9 * s,   0,    11 * s);
+            ctx.bezierCurveTo( 3 * s,  9 * s,   9 * s,  6 * s,   9 * s,  3 * s);
+            ctx.bezierCurveTo( 9 * s,  3 * s,   9 * s, -3 * s,   6 * s, -3 * s);
+            ctx.bezierCurveTo( 3 * s, -3 * s,   0,    2 * s,   0,    5 * s);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    function drawEndBanner(ctx) {
+        const w = game.w, h = game.h;
+        const t = performance.now();
+        const pulse = 0.7 + 0.3 * (0.5 + 0.5 * Math.sin(t * 0.01));
+        const winYou = state.winner === 'you';
+        ctx.font = "400 96px 'Monoton', Impact, sans-serif";
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = winYou ? '#00FF9F' : '#FF1744';
+        ctx.shadowColor = ctx.fillStyle;
+        ctx.shadowBlur = 30;
+        ctx.globalAlpha = pulse;
+        ctx.fillText(winYou ? 'VICTORY' : 'DEFEATED', w / 2, h / 2);
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+    }
+
+    function explodeAtVs(x, y, palette, count) {
+        const pickKind = () => {
+            if (palette === 'cyan') return Math.random() < 0.8 ? 'cyan' : 'magenta';
+            if (palette === 'gold') return 'gold';
+            if (palette === 'magenta') return 'magenta';
+            if (palette === 'redmagenta') return Math.random() < 0.5 ? 'red' : 'magenta';
+            return 'cyan';
+        };
+        for (let i = 0; i < count; i++) {
+            const a = Math.random() * Math.PI * 2;
+            const s = 0.05 + Math.random() * 0.4;
+            state.particles.push({
+                x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                life: 600 + Math.random() * 400, max: 1000, kind: pickKind(),
+            });
+        }
+    }
+
+    function openPicker() { show('versus-setup'); }
+    function isActive() { return state.active; }
+    function quitToMenu() {
+        state.active = false;
+        state.words = []; state.particles = []; state.floaters = [];
+        hide('versus-over');
+        toMenu();
+    }
+
+    return { TIERS, openPicker, start, update, draw, onKey, isActive, quitToMenu };
+})();
+
+// Route keystrokes to Versus when active (before single-player input).
+(function wireVersusInput() {
+    const origOnKey = onKey;
+    onKey = function (e) {
+        if (Versus.isActive()) {
+            if (Versus.onKey(e)) return;
+        }
+        return origOnKey.call(this, e);
+    };
+})();
+
+// Patch the main render loop to drive Versus when active.
+(function wireVersusLoop() {
+    const origLoop = loop;
+    loop = function (now) {
+        if (Versus.isActive()) {
+            const dt = Math.min(64, now - (game.last || now));
+            game.last = now;
+            if (game.fps == null) game.fps = 60;
+            else game.fps = game.fps * 0.92 + (1000 / Math.max(1, dt)) * 0.08;
+            Versus.update(dt);
+            Versus.draw(game.ctx);
+            requestAnimationFrame(loop);
+            return;
+        }
+        origLoop(now);
+    };
+})();
+
+// Wire menu card click + tier picker + result buttons.
+(function wireVersusMenu() {
+    document.querySelectorAll('#mode-select .mode').forEach(el => {
+        if (el.dataset.mode === 'versus') {
+            el.addEventListener('click', () => Versus.openPicker());
+        }
+    });
+    document.querySelectorAll('#vs-tiers .vs-tier').forEach(el => {
+        el.addEventListener('click', () => Versus.start(el.dataset.tier));
+    });
+    const closeBtn = document.getElementById('versus-close');
+    if (closeBtn) closeBtn.addEventListener('click', () => hide('versus-setup'));
+    const rematch = document.getElementById('vs-rematch');
+    if (rematch) rematch.addEventListener('click', () => { hide('versus-over'); Versus.openPicker(); });
+    const vsMenu = document.getElementById('vs-to-menu');
+    if (vsMenu) vsMenu.addEventListener('click', () => Versus.quitToMenu());
+})();
 
 init();
 // Step 4 DOM wiring (defer until after init has cached canvas + listeners)
