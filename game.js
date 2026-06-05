@@ -1330,7 +1330,9 @@ function spawnBoss() {
         type: 'boss',
         letters, startX,
         // Step-4 difficulty: hard countdown + letter regrowth on stall.
+        // timerArmed flips true only once the word clears the top cover.
         timeLimit, timeLeft: timeLimit,
+        timerArmed: false,
         idleT: 0,
         regrowEnabled: game.level >= 10,
         regrowIdleMs: bossRegrowIdleMs(game.level),
@@ -2049,30 +2051,36 @@ function update(dt) {
     }
 
     // Boss fight: hard countdown + letter regrowth (you can't stall).
-    // Both tick on scaled time, so a FREEZE power-up genuinely helps vs a
-    // boss — it slows the countdown and delays regrowth.
+    // The countdown only ARMS once the boss has fully descended past the top
+    // cover — burning the timer while the word is still hidden/entering isn't
+    // fair. Both tick on scaled time, so a FREEZE power-up genuinely helps.
     if (game.bossState === 'fighting' && game.bossActive) {
         const boss = game.bossActive;
-        boss.timeLeft -= sdt;
-        boss.idleT += sdt;
-        if (boss.regrowEnabled && boss.typed > 0 && boss.typed < boss.text.length
-            && boss.idleT >= boss.regrowIdleMs) {
-            // Idling too long → the most recently shattered letter regrows.
-            const li = boss.letters[boss.typed - 1];
-            if (li) {
-                li.alive = true;
-                li.shatterT = 0;
-                li.regrowT = 280;
-                boss.typed--;
-                boss.idleT = 0;
-                game.flash = Math.max(game.flash, 0.22); game.flashColor = '#FF8A00';
-                game.shake = Math.max(game.shake, 5);
-                renderInput();
-            }
+        if (!boss.timerArmed && boss.y >= TOP_HUD_H + boss.size / 2) {
+            boss.timerArmed = true;
         }
-        if (boss.timeLeft <= 0) {
-            bossEscaped(boss);
-            return;
+        if (boss.timerArmed) {
+            boss.timeLeft -= sdt;
+            boss.idleT += sdt;
+            if (boss.regrowEnabled && boss.typed > 0 && boss.typed < boss.text.length
+                && boss.idleT >= boss.regrowIdleMs) {
+                // Idling too long → the most recently shattered letter regrows.
+                const li = boss.letters[boss.typed - 1];
+                if (li) {
+                    li.alive = true;
+                    li.shatterT = 0;
+                    li.regrowT = 280;
+                    boss.typed--;
+                    boss.idleT = 0;
+                    game.flash = Math.max(game.flash, 0.22); game.flashColor = '#FF8A00';
+                    game.shake = Math.max(game.shake, 5);
+                    renderInput();
+                }
+            }
+            if (boss.timeLeft <= 0) {
+                bossEscaped(boss);
+                return;
+            }
         }
     }
 
