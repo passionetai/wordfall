@@ -342,14 +342,17 @@ const SFX_MANIFEST = {
     'boss-warning': 'assets/audio/sfx-boss-warning.mp3',
     'boss-defeat':  'assets/audio/sfx-boss-defeat.mp3',
 };
-const MUSIC_PATH = 'assets/audio/music-main-loop.mp3';
+const MUSIC_PATH = 'assets/audio/music-main-loop.mp3';   // in-game
+const MENU_MUSIC_PATH = 'assets/audio/music-menu-loop.wav'; // home/menu
 
 const AudioManager = (() => {
     const pools = {};        // name → [Audio, Audio, Audio]
     const failed = {};       // name → true
     let nextIdx = {};
-    let musicEl = null;
-    let musicFailed = false;
+    // Two music beds: a calm 'menu' loop and the driving 'game' loop.
+    const musicEls = { menu: null, game: null };
+    const musicFailedMap = { menu: false, game: false };
+    let activeMusic = 'menu';
     let musicStarted = false;
     let musicEnabled = true;
     let sfxEnabled = true;
@@ -357,10 +360,13 @@ const AudioManager = (() => {
     let sfxVol = 0.6;
     let baseMusicVol = 0.4;  // pre-duck level
     let duckEndAt = 0;       // timestamp until which music is ducked
-    let totalAssets = Object.keys(SFX_MANIFEST).length + 1; // sfx + 1 music
+    let totalAssets = Object.keys(SFX_MANIFEST).length + 2; // sfx + 2 music beds
     let loadedAssets = 0;
     let onProgress = null;
     let onReady = null;
+
+    function currentEl() { return musicEls[activeMusic]; }
+    function currentFailed() { return musicFailedMap[activeMusic]; }
 
     function preload(opts = {}) {
         onProgress = opts.onProgress || null;
@@ -401,24 +407,29 @@ const AudioManager = (() => {
             setTimeout(() => settle(true), 2500);
             try { probe.load(); } catch (e) { settle(false); }
         });
-        // Music element
-        musicEl = new window.Audio();
-        musicEl.preload = 'auto';
-        musicEl.loop = true;
-        musicEl.src = MUSIC_PATH;
-        musicEl.volume = musicVol;
-        let musicSettled = false;
-        const settleMusic = (ok) => {
-            if (musicSettled) return;
-            musicSettled = true;
-            if (!ok) { musicFailed = true; console.warn('Word Fall: music failed', MUSIC_PATH); }
-            bumpAsset();
+        // Two music beds (menu + game)
+        const loadBed = (which, src) => {
+            const el = new window.Audio();
+            el.preload = 'auto';
+            el.loop = true;
+            el.src = src;
+            el.volume = musicVol;
+            musicEls[which] = el;
+            let settled = false;
+            const settle = (ok) => {
+                if (settled) return;
+                settled = true;
+                if (!ok) { musicFailedMap[which] = true; console.warn('Word Fall: music failed', src); }
+                bumpAsset();
+            };
+            el.addEventListener('loadeddata', () => settle(true), { once: true });
+            el.addEventListener('canplay',    () => settle(true), { once: true });
+            el.addEventListener('error',      () => settle(false), { once: true });
+            setTimeout(() => settle(true), 3500);
+            try { el.load(); } catch (e) { settle(false); }
         };
-        musicEl.addEventListener('loadeddata', () => settleMusic(true), { once: true });
-        musicEl.addEventListener('canplay',    () => settleMusic(true), { once: true });
-        musicEl.addEventListener('error',      () => settleMusic(false), { once: true });
-        setTimeout(() => settleMusic(true), 3500);
-        try { musicEl.load(); } catch (e) { settleMusic(false); }
+        loadBed('menu', MENU_MUSIC_PATH);
+        loadBed('game', MUSIC_PATH);
     }
 
     function bumpAsset() {
@@ -450,23 +461,41 @@ const AudioManager = (() => {
     }
 
     function playMusic() {
-        if (!musicEnabled || musicFailed || !musicEl) return;
-        const p = musicEl.play();
+        if (!musicEnabled) return;
+        const el = currentEl();
+        if (currentFailed() || !el) return;
+        el.volume = duckEndAt > performance.now() ? baseMusicVol * 0.3 : baseMusicVol;
+        const p = el.play();
         if (p && p.catch) p.catch(() => {});
         musicStarted = true;
     }
     function pauseMusic() {
-        if (musicEl) { try { musicEl.pause(); } catch (e) {} }
+        // Pause whichever beds may be playing.
+        Object.values(musicEls).forEach(el => { if (el) { try { el.pause(); } catch (e) {} } });
     }
     function resumeMusic() {
-        if (!musicEnabled || musicFailed || !musicEl) return;
-        const p = musicEl.play();
-        if (p && p.catch) p.catch(() => {});
+        if (!musicEnabled) return;
+        playMusic();
+    }
+    // Switch which bed is the active music. Pauses the other and (if music
+    // has already been unlocked by a user gesture) starts the new one.
+    function setActiveMusic(which) {
+        if (which !== 'menu' && which !== 'game') return;
+        if (which === activeMusic) {
+            // Same bed — just make sure it's playing if it should be.
+            if (musicStarted && musicEnabled) playMusic();
+            return;
+        }
+        const prev = musicEls[activeMusic];
+        if (prev) { try { prev.pause(); prev.currentTime = 0; } catch (e) {} }
+        activeMusic = which;
+        if (musicStarted && musicEnabled) playMusic();
     }
     function setMusicVolume(v) {
         musicVol = Math.max(0, Math.min(1, v));
         baseMusicVol = musicVol;
-        if (musicEl) musicEl.volume = duckEndAt > performance.now() ? musicVol * 0.3 : musicVol;
+        const vol = duckEndAt > performance.now() ? musicVol * 0.3 : musicVol;
+        Object.values(musicEls).forEach(el => { if (el) el.volume = vol; });
     }
     function setSFXVolume(v) {
         sfxVol = Math.max(0, Math.min(1, v));
@@ -481,19 +510,20 @@ const AudioManager = (() => {
     }
     function duck(ms = 2000, factor = 0.3) {
         duckEndAt = performance.now() + ms;
-        if (musicEl) musicEl.volume = baseMusicVol * factor;
+        const el = currentEl();
+        if (el) el.volume = baseMusicVol * factor;
         setTimeout(() => {
-            if (performance.now() >= duckEndAt - 16 && musicEl) musicEl.volume = baseMusicVol;
+            if (performance.now() >= duckEndAt - 16 && currentEl()) currentEl().volume = baseMusicVol;
         }, ms);
     }
     function isReady() { return loadedAssets >= totalAssets; }
     function progress() { return totalAssets > 0 ? loadedAssets / totalAssets : 0; }
-    function musicAvailable() { return !musicFailed && !!musicEl; }
+    function musicAvailable() { return !currentFailed() && !!currentEl(); }
 
     return {
         preload,
         playSFX,
-        playMusic, pauseMusic, resumeMusic,
+        playMusic, pauseMusic, resumeMusic, setActiveMusic,
         setMusicVolume, setSFXVolume,
         setMusicEnabled, setSFXEnabled,
         duck,
@@ -786,7 +816,7 @@ function init() {
     const bootBar = document.getElementById('boot-progress');
     if (bootBar) bootBar.classList.add('show');
     let imgDone = 0, imgTotal = Object.keys(ASSET_MANIFEST).length;
-    let audioDone = 0, audioTotal = Object.keys(SFX_MANIFEST).length + 1;
+    let audioDone = 0, audioTotal = Object.keys(SFX_MANIFEST).length + 2;
     const updateBoot = () => {
         const total = imgTotal + audioTotal;
         const done  = imgDone + audioDone;
@@ -889,6 +919,7 @@ function startGame() {
 
     game.state = 'playing';
     if (typeof AmbientLetters !== 'undefined') AmbientLetters.stop();
+    AudioManager.setActiveMusic('game');
     game.words = []; game.bullets = []; game.particles = []; game.floaters = [];
     game.target = null; game.input = '';
     game.score = 0; game.level = 1;
@@ -932,6 +963,7 @@ function startGame() {
 function toMenu() {
     game.state = 'menu';
     if (typeof AmbientLetters !== 'undefined') AmbientLetters.start();
+    AudioManager.setActiveMusic('menu');
     show('menu'); hide('gameover');
     refreshHighUI();
     if (typeof refreshDailyCard === 'function') refreshDailyCard();
