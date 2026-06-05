@@ -530,15 +530,61 @@
             box-shadow: 0 0 12px rgba(0, 240, 255, 0.12);
         }
 
+        /* High-contrast circular close button used in Settings, Stats, and
+           any panel that opens over the menu. Sized for fingers, not pixels. */
         .close-x {
-            position: absolute; top: 10px; right: 14px;
-            background: transparent; border: none;
-            color: var(--text-dim);
-            font-size: 28px; line-height: 1;
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            width: 40px;
+            height: 40px;
+            background: rgba(0, 0, 0, 0.55);
+            border: 2px solid var(--neon-cyan);
+            border-radius: 50%;
+            color: var(--text-bright);
+            font-family: var(--font-display);
+            font-size: 26px;
+            line-height: 1;
             cursor: pointer;
-            padding: 4px 8px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-shadow: 0 0 8px var(--neon-cyan);
+            box-shadow: 0 0 12px rgba(0, 240, 255, 0.35), inset 0 0 8px rgba(0, 240, 255, 0.18);
+            transition: transform 0.15s ease, background 0.15s ease,
+                        border-color 0.15s ease, color 0.15s ease,
+                        box-shadow 0.15s ease;
+            z-index: 5;
         }
-        .close-x:hover { color: var(--neon-cyan); }
+        .close-x:hover,
+        .close-x:focus-visible {
+            background: var(--neon-magenta);
+            border-color: var(--neon-magenta);
+            color: #0A0E1A;
+            text-shadow: none;
+            box-shadow: 0 0 18px var(--neon-magenta), inset 0 0 12px rgba(255, 46, 151, 0.45);
+            transform: scale(1.06);
+            outline: none;
+        }
+        .close-x:active { transform: scale(0.96); }
+        @media (max-width: 600px) {
+            .close-x { width: 44px; height: 44px; font-size: 28px; }
+        }
+
+        /* Make in-modal ghost dismiss buttons (Back / Cancel) more legible
+           — they used to read as a faint outline at the bottom of a panel.
+           This brightens borders + text and gives them a clearer hover. */
+        .panel .btn.ghost {
+            border-width: 2px;
+            color: var(--text-bright);
+            text-shadow: 0 0 10px var(--neon-cyan), 0 0 16px var(--neon-cyan);
+        }
+        .panel .btn.ghost:hover {
+            background: rgba(0, 240, 255, 0.10);
+            box-shadow: 0 0 16px rgba(0, 240, 255, 0.55),
+                        inset 0 0 12px rgba(0, 240, 255, 0.18);
+        }
 
         #share-toast {
             position: fixed;
@@ -840,7 +886,26 @@
             border-radius: 16px;
             padding: 28px;
             box-shadow: 0 0 32px rgba(255, 23, 68, 0.25);
+            position: relative;
         }
+        /* On the danger (red) panel, the close X uses a red theme so it
+           reads as part of the same modal language. */
+        #confirm-reset .close-x {
+            border-color: var(--bomb-red);
+            color: var(--text-bright);
+            text-shadow: 0 0 8px var(--bomb-red);
+            box-shadow: 0 0 12px rgba(255, 23, 68, 0.4), inset 0 0 8px rgba(255, 23, 68, 0.18);
+        }
+        #confirm-reset .close-x:hover,
+        #confirm-reset .close-x:focus-visible {
+            background: var(--bomb-red);
+            color: #0A0E1A;
+            text-shadow: none;
+            box-shadow: 0 0 18px var(--bomb-red), inset 0 0 12px rgba(255, 23, 68, 0.5);
+        }
+        /* Daily-played panel needs to be positioned so the close X lands
+           inside it (the default .panel has no position). */
+        .dp-panel { position: relative; }
         .confirm-panel h2 {
             font-family: var(--font-display);
             color: var(--bomb-red);
@@ -1487,7 +1552,8 @@
     </div>
 
     <div class="overlay" id="daily-played">
-        <div class="panel">
+        <div class="panel dp-panel">
+            <button class="close-x" id="dp-close-x" aria-label="Close">&times;</button>
             <h2>DAILY DONE</h2>
             <p id="dp-sub">You crushed today&rsquo;s puzzle.</p>
             <div class="stats">
@@ -1580,6 +1646,7 @@
 
     <div class="overlay" id="confirm-reset">
         <div class="panel confirm-panel">
+            <button class="close-x" id="confirm-close-x" aria-label="Close">&times;</button>
             <h2>RESET?</h2>
             <p>Are you sure? This deletes your high scores, achievements, and daily history. This cannot be undone.</p>
             <div class="btn-row">
