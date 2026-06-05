@@ -1516,12 +1516,18 @@ function onKey(e) {
 
     if (!game.target) {
         const candidates = lockOnCandidates();
-        let best = null;
+        // Prefer the lowest non-decoy match; only fall back to a decoy if no
+        // real word starts with this letter.
+        let best = null, bestDecoy = null;
         for (const w of candidates) {
-            if (w.text[0] === ch) {
+            if (w.text[0] !== ch) continue;
+            if (w.type === 'decoy') {
+                if (!bestDecoy || w.y > bestDecoy.y) bestDecoy = w;
+            } else {
                 if (!best || w.y > best.y) best = w;
             }
         }
+        if (!best) best = bestDecoy;
         if (best) {
             game.target = best;
             best.typed = 1;
@@ -1589,7 +1595,10 @@ function lockOnCandidates() {
         return [game.bossActive];
     }
     if (game.bossState === 'warning') return [];
-    return game.words.filter(w => w.type !== 'decoy' && w.type !== 'boss');
+    // Decoys ARE lockable now (0-point combo-trap on completion). Lock-on
+    // still PREFERS non-decoy candidates so they only catch sloppy typing —
+    // see the picker in onKey.
+    return game.words.filter(w => w.type !== 'boss');
 }
 
 function letterScreenX(boss, letter) {
@@ -1628,6 +1637,21 @@ function typeMultiplier(t) {
 }
 
 function completeWord(w) {
+    // Decoy: you typed a fake. 0 points, combo break, clear feedback so the
+    // player learns the warning. No life loss — the visual strikethrough +
+    // ghost-cyan glow was the warning.
+    if (w.type === 'decoy') {
+        game.combo = 0;
+        game.multiplier = 1;
+        game.comboTimer = 0;
+        showToast('BAIT', '#FF8A00');
+        game.flash = Math.max(game.flash, 0.35); game.flashColor = '#FF8A00';
+        game.shake = Math.max(game.shake, 6);
+        explodeAt(w.x, w.y, false, 12, 'cyan');
+        game.words = game.words.filter(x => x !== w);
+        game.target = null; game.input = ''; renderInput();
+        return;
+    }
     const base = 10 * w.text.length;
     const typeMul = typeMultiplier(w.type);
     let gained = Math.round(base * typeMul * game.multiplier);
@@ -1826,10 +1850,15 @@ function usePowerup(kind) {
         game.flash = 0.3; game.flashColor = '#00F0FF';
     } else if (kind === 'bomb') {
         const targets = game.words.filter(w => w.type !== 'boss');
-        const reward = targets.length;
+        // Only real words contribute to the score + the toast count;
+        // decoys are vapourised for free.
+        let reward = 0;
         for (const w of targets) {
             explodeAt(w.x, w.y, false, 22, 'cyan');
-            game.score += Math.round(5 * w.text.length * game.multiplier);
+            if (w.type !== 'decoy') {
+                reward++;
+                game.score += Math.round(5 * w.text.length * game.multiplier);
+            }
         }
         game.words = game.words.filter(w => w.type === 'boss');
         // If the bomb-power-up killed a twin's partner, clean other twin's chain state.
@@ -2482,17 +2511,31 @@ function drawWords(ctx) {
         ctx.font = `${fontSize}px VT323, monospace`;
 
         if (w.type === 'decoy') {
-            // Was almost invisible — bump the pulse range, give it a soft
-            // ghost-cyan glow + a strikethrough so it's obviously a 'fake'
-            // word but still readable.
-            const alpha = 0.55 + 0.30 * (0.5 + 0.5 * Math.sin(t / 1500 * 2 * Math.PI));
+            // Ghost-cyan + strikethrough = "do not type". If the player ignores
+            // the warning and locks one, the typed prefix renders in WARNING
+            // ORANGE (not gold like real words) so it reads as wrong-doing,
+            // and a 'BAIT' toast fires on completion.
+            const alpha = isTarget
+                ? 0.95                                  // pin to full when locked, no pulse
+                : 0.55 + 0.30 * (0.5 + 0.5 * Math.sin(t / 1500 * 2 * Math.PI));
             ctx.globalAlpha = alpha;
-            drawWordSegment(ctx, w.text, x, y, '#9fb0d8', '#9fb0d8', 10, /*centered*/true);
-            // Strikethrough hint (also doubles as a clear "do not type" cue).
-            // Reuses the spawn-time width on the word object — no per-frame
-            // measureText.
-            ctx.strokeStyle = 'rgba(159, 176, 216, 0.7)';
-            ctx.lineWidth = 1.5;
+            if (isTarget && w.typed > 0) {
+                const totalW = w.width;
+                const startX = x - totalW / 2;
+                ctx.textAlign = 'left';
+                const typed = w.text.slice(0, w.typed);
+                const rest  = w.text.slice(w.typed);
+                const typedW = ctx.measureText(typed).width;
+                drawWordSegment(ctx, typed, startX, y, '#FF8A00', '#FF8A00', 14, false);
+                drawWordSegment(ctx, rest,  startX + typedW, y, '#9fb0d8', '#9fb0d8', 10, false);
+                ctx.textAlign = 'center';
+            } else {
+                drawWordSegment(ctx, w.text, x, y, '#9fb0d8', '#9fb0d8', 10, /*centered*/true);
+            }
+            // Strikethrough hint. Reuses the spawn-time width on the word —
+            // no per-frame measureText for layout.
+            ctx.strokeStyle = isTarget ? 'rgba(255, 138, 0, 0.85)' : 'rgba(159, 176, 216, 0.7)';
+            ctx.lineWidth = isTarget ? 2 : 1.5;
             ctx.beginPath();
             ctx.moveTo(x - w.width / 2, y);
             ctx.lineTo(x + w.width / 2, y);
