@@ -20,7 +20,10 @@ const WORDS = {
     tier2: ('time year work life hand part case week point fact game node hero star moon wave fire rain snow leaf rose lake river beach plant cloud light dream brave quick smart proud noisy quiet sharp brick stone metal glass pearl crown sword frost storm flame ember').split(' '),
     tier3: ('window forest planet rocket dragon castle silver galaxy thunder breeze stream meadow valley summit ridge crystal harbor temple wonder garden orchid wizard pirate phantom blossom whisper ranger archer falcon comet aurora cosmos legend').split(' '),
     tier4: ('mountain elephant dinosaur sunshine universe rainbow penguin octopus monarch volcano harvest mystery library journey horizon adventure paradise melody victory infinite gravity magnetic absolute hurricane wilderness lighthouse').split(' '),
-    tier5: ('astronaut quicksilver kaleidoscope encyclopedia revolutionary phenomenal labyrinthine extraordinary independence constellation choreography metamorphosis perpendicular unfathomable thunderstorm reverberation incandescent juxtaposition').split(' '),
+    // Note: tier5 is regular-game vocabulary only — boss-reserved words
+    // (kaleidoscope, thunderstorm, constellation, etc.) live exclusively in
+    // BOSS_WORDS so they can't appear as regular falling words.
+    tier5: ('astronaut revolutionary labyrinthine extraordinary independence bewildering philosophical antagonist illuminate accelerate distinguish fascinating championship controversial contemporary perspective artificial appropriate').split(' '),
 };
 
 function poolForLevel(level) {
@@ -46,14 +49,22 @@ const BOSS_WORDS = [
 ];
 
 // ---------- DeepSeek integration (optional, per-user API key) ----------
-// API key lives in localStorage — never in source. If absent the game uses
-// BOSS_WORDS directly. When a key is present, we top up a small per-session
-// word pool in the background and pull from it when spawning a boss.
+// API key lives in localStorage — never in source. Two parallel pools:
+//   game — regular falling words (4-12 letters, mid-difficulty prompt)
+//   boss — boss vocabulary (10-22 letters, harder prompt scaled by level)
+// Both refill independently in the background; each call site pulls from
+// the appropriate pool with seamless fallback to local lists.
 const DeepSeek = (() => {
     const KEY_STORAGE = 'wordfall_deepseek_key';
     const URL = 'https://api.deepseek.com/v1/chat/completions';
-    let pool = [];
-    let fetching = false;
+    const pools = { game: [], boss: [] };
+    const fetching = { game: false, boss: false };
+    // Targets above which we don't bother refilling.
+    const POOL_CAPS = { game: 12, boss: 6 };
+    // Refill threshold — drop below this and we kick a background refill.
+    const POOL_LOW  = { game: 5,  boss: 3 };
+    // Batch size per fetch.
+    const BATCH     = { game: 10, boss: 6 };
 
     function getKey() {
         try { return (localStorage.getItem(KEY_STORAGE) || '').trim(); }
@@ -64,25 +75,45 @@ const DeepSeek = (() => {
             if (k && k.trim()) localStorage.setItem(KEY_STORAGE, k.trim());
             else localStorage.removeItem(KEY_STORAGE);
         } catch (e) {}
-        // Reset pool on key change.
-        pool = [];
+        // Reset both pools on key change.
+        pools.game = []; pools.boss = [];
     }
     function hasKey() { return !!getKey(); }
-    function poolSize() { return pool.length; }
+    function poolSize(which) { return which ? (pools[which] || []).length : pools.game.length + pools.boss.length; }
 
-    function difficultyFor(level) {
-        // Bigger minimum word length + sharper temperature as players climb.
-        const minLen = Math.min(16, 10 + Math.floor((level - 5) / 2));
-        const maxLen = Math.min(22, minLen + 5);
-        const temp   = Math.min(1.0, 0.55 + level * 0.025);
+    function difficultyFor(which, level) {
+        if (which === 'boss') {
+            const minLen = Math.min(16, 10 + Math.floor((level - 5) / 2));
+            const maxLen = Math.min(22, minLen + 5);
+            const temp   = Math.min(1.0, 0.55 + level * 0.025);
+            return { minLen, maxLen, temp };
+        }
+        // Regular gameplay words — grow with level but stay typeable.
+        const minLen = Math.max(3, 3 + Math.floor(Math.max(0, level - 1) / 2));
+        const maxLen = Math.min(11, Math.max(6, minLen + 4));
+        const temp   = 0.7;
         return { minLen, maxLen, temp };
     }
 
-    async function fetchBatch(level, count = 6) {
+    function promptFor(which, level, count, minLen, maxLen) {
+        if (which === 'boss') {
+            return `Return ${count} interesting, real, single-token English words, each ` +
+                   `${minLen}–${maxLen} letters long, lowercase, no spaces, no hyphens, ` +
+                   `no proper nouns, no offensive words. Words should feel suitable as ` +
+                   `final-boss vocabulary in a typing game at difficulty ${level}/30.`;
+        }
+        return `Return ${count} varied, real, single-token English words, each ` +
+               `${minLen}–${maxLen} letters long, lowercase, no spaces, no hyphens, ` +
+               `no proper nouns, no offensive words. Mix everyday nouns, verbs, and ` +
+               `descriptive adjectives. Words should feel suitable for typing in a ` +
+               `casual word game at level ${level}.`;
+    }
+
+    async function fetchBatch(which, level, count) {
         const key = getKey();
-        if (!key || fetching) return null;
-        fetching = true;
-        const { minLen, maxLen, temp } = difficultyFor(level);
+        if (!key || fetching[which]) return null;
+        fetching[which] = true;
+        const { minLen, maxLen, temp } = difficultyFor(which, level);
         try {
             const res = await fetch(URL, {
                 method: 'POST',
@@ -96,22 +127,15 @@ const DeepSeek = (() => {
                         {
                             role: 'system',
                             content:
-                                'You generate uncommon English words for a typing game called Word Fall. ' +
+                                'You generate single English words for a typing game called Word Fall. ' +
                                 'You respond with ONLY a valid JSON object {"words": [string, ...]} — ' +
                                 'no markdown, no commentary, no code fences.',
                         },
-                        {
-                            role: 'user',
-                            content:
-                                `Return ${count} interesting, real, single-token English words, each ` +
-                                `${minLen}–${maxLen} letters long, lowercase, no spaces, no hyphens, ` +
-                                `no proper nouns, no offensive words. Words should feel suitable as ` +
-                                `final-boss vocabulary in a typing game at difficulty ${level}/30.`,
-                        },
+                        { role: 'user', content: promptFor(which, level, count, minLen, maxLen) },
                     ],
                     response_format: { type: 'json_object' },
                     temperature: temp,
-                    max_tokens: 240,
+                    max_tokens: which === 'boss' ? 240 : 360,
                 }),
             });
             if (!res.ok) {
@@ -126,7 +150,6 @@ const DeepSeek = (() => {
             let parsed;
             try { parsed = JSON.parse(content); }
             catch (e) {
-                // Strip code fences if the model included them despite the prompt.
                 const m = content.match(/\{[\s\S]*\}/);
                 if (!m) return null;
                 parsed = JSON.parse(m[0]);
@@ -134,28 +157,41 @@ const DeepSeek = (() => {
             const words = Array.isArray(parsed.words) ? parsed.words : [];
             const clean = words
                 .map(w => String(w || '').toLowerCase().trim())
-                .filter(w => /^[a-z]{8,22}$/.test(w));
+                .filter(w => w.length >= minLen && w.length <= maxLen + 2)
+                .filter(w => /^[a-z]+$/.test(w));
             return clean.length ? clean : null;
         } catch (e) {
-            console.warn('Word Fall: DeepSeek fetch failed', e);
+            console.warn('Word Fall: DeepSeek ' + which + ' fetch failed', e);
             return null;
         } finally {
-            fetching = false;
+            fetching[which] = false;
         }
     }
 
-    // Top up the pool in the background. Safe to call frequently.
-    async function refill(level) {
-        if (!hasKey() || pool.length >= 4 || fetching) return;
-        const fresh = await fetchBatch(level, 6);
-        if (fresh) pool.push(...fresh);
+    async function refill(level, which) {
+        which = which || 'boss';
+        if (!hasKey() || pools[which].length >= POOL_LOW[which] || fetching[which]) return;
+        const fresh = await fetchBatch(which, level, BATCH[which]);
+        if (fresh) {
+            pools[which].push(...fresh);
+            if (pools[which].length > POOL_CAPS[which]) pools[which].length = POOL_CAPS[which];
+        }
     }
-    // Get one word for the current boss; null if pool empty.
-    function take() {
-        return pool.length ? pool.shift() : null;
+    function take(which) {
+        which = which || 'boss';
+        return pools[which].length ? pools[which].shift() : null;
     }
 
-    return { getKey, setKey, hasKey, poolSize, refill, take };
+    // Warm both pools at once — boss aims at game.level (with a floor at 5
+    // so the first boss has fitting vocab), game uses the same level.
+    // Both refills short-circuit if the pool is already topped up.
+    function warmAll(level) {
+        const l = level || 1;
+        refill(Math.max(5, l), 'boss').catch(() => {});
+        refill(Math.max(1, l), 'game').catch(() => {});
+    }
+
+    return { getKey, setKey, hasKey, poolSize, refill, take, warmAll };
 })();
 
 // ---------- Word type spawn weights by level ----------
@@ -962,10 +998,11 @@ function startGame() {
     hide('menu'); hide('gameover'); hide('daily-played'); hide('stats-modal');
     Audio.resume();
 
-    // Warm up DeepSeek pool in the background so the first boss already has
-    // a word ready. Skipped in daily mode (must stay deterministic).
+    // Warm up both DeepSeek pools in the background so the first boss has a
+    // word ready and the regular stream gets AI flavour right away. Skipped
+    // in daily mode (must stay deterministic).
     if (!game.isDaily && DeepSeek.hasKey()) {
-        DeepSeek.refill(Math.max(5, game.level)).catch(() => {});
+        DeepSeek.warmAll(game.level);
     }
 }
 
@@ -1081,8 +1118,35 @@ function detonationGameOver() {
 // ---------- Spawning ----------
 function recentWordTexts() { return new Set(game.words.map(w => w.text)); }
 
+// Boss words must never appear as regular falling words — a thin safety
+// net in case the data ever drifts or DeepSeek hallucinates a boss word.
+const BOSS_WORDS_SET = new Set(BOSS_WORDS);
+// localPool is pure of game.level — cache the filtered array per level so
+// pickWord (called once per spawn) doesn't re-allocate on every word.
+const _localPoolCache = Object.create(null);
+function localPool(level) {
+    if (!_localPoolCache[level]) {
+        _localPoolCache[level] = poolForLevel(level).filter(w => !BOSS_WORDS_SET.has(w));
+    }
+    return _localPoolCache[level];
+}
+
+// How often regular falling words come from DeepSeek when a key is set.
+// Boss + Versus consume from their pools 100% of the time; regular play
+// mixes AI words in with the local pools so the cadence still feels
+// familiar even when DeepSeek hits a rate limit.
+const DEEPSEEK_GAME_RATE = 0.35;
+
 function pickWord() {
-    const pool = poolForLevel(game.level);
+    if (!game.isDaily && DeepSeek.hasKey()) {
+        // Always kick a background refill so the pool stays warm.
+        DeepSeek.refill(game.level, 'game').catch(() => {});
+        if (Math.random() < DEEPSEEK_GAME_RATE) {
+            const w = DeepSeek.take('game');
+            if (w && !BOSS_WORDS_SET.has(w)) return w;
+        }
+    }
+    const pool = localPool(game.level);
     const used = new Set(game.words.map(w => w.text[0]));
     const same = recentWordTexts();
     let candidates = pool.filter(w => !used.has(w[0]) && !same.has(w));
@@ -1092,7 +1156,7 @@ function pickWord() {
 }
 
 function pickTwoDistinctWords() {
-    const pool = poolForLevel(game.level);
+    const pool = localPool(game.level);   // boss-words stripped
     const same = recentWordTexts();
     const used = new Set(game.words.map(w => w.text[0]));
     let a = pickWord();
@@ -1236,13 +1300,12 @@ function startBossWarning() {
 }
 
 function pickBossText() {
-    // Prefer a DeepSeek word if one is queued (only used in non-daily modes —
-    // we must keep daily runs deterministic). Top up the pool in the
+    // Prefer a DeepSeek boss word if one is queued (only used in non-daily
+    // modes — daily must stay deterministic). Top up the boss pool in the
     // background for the next boss.
     if (!game.isDaily && DeepSeek.hasKey()) {
-        const w = DeepSeek.take();
-        // Fire-and-forget refill while we use the current word.
-        DeepSeek.refill(game.level).catch(() => {});
+        DeepSeek.refill(game.level, 'boss').catch(() => {});
+        const w = DeepSeek.take('boss');
         if (w) return w;
     }
     // Local fallback: bias toward longer words as level climbs so each
@@ -4344,8 +4407,8 @@ function wireStep5DOM() {
             input.value = '';
             input.placeholder = '••••••••  (saved)';
             shareToast('DeepSeek key saved');
-            // Warm up the pool immediately.
-            DeepSeek.refill(Math.max(5, game.level || 5)).catch(() => {});
+            // Warm up both pools immediately.
+            DeepSeek.warmAll(game.level || 1);
         });
         if (clearBtn) clearBtn.addEventListener('click', () => {
             DeepSeek.setKey('');
@@ -4406,6 +4469,15 @@ const Versus = (() => {
     //   maxYouOnScreen — concurrency cap for incoming-at-you (set to 1 for
     //                    a TRUE rookie experience: one word at a time)
     //   maxCpuOnScreen — same for the bot side
+
+    // Versus uses a fixed concatenated pool (tier1-tier4) regardless of
+    // single-player level. Lifted to module scope so pickText doesn't
+    // re-concat + re-filter on every word spawn. Boss-reserved words are
+    // already absent (cleaned at the data source in WORDS.tier5).
+    const VERSUS_LOCAL_POOL = WORDS.tier1
+        .concat(WORDS.tier2, WORDS.tier3, WORDS.tier4)
+        .filter(w => !BOSS_WORDS_SET.has(w));
+
     const TIERS = {
         rookie: {
             label: 'ROOKIE',  approxWpm: 20,
@@ -4472,13 +4544,18 @@ const Versus = (() => {
     }
 
     function pickText(tier) {
+        // Versus uses the game pool (mid-length conversational words).
+        // Boss vocabulary lives in its own pool and never leaks here.
         if (DeepSeek && DeepSeek.hasKey && DeepSeek.hasKey()) {
-            const w = DeepSeek.take && DeepSeek.take();
-            DeepSeek.refill && DeepSeek.refill(8).catch(() => {});
-            if (w && w.length >= tier.wordLenMin && w.length <= tier.wordLenMax + 2) return w;
+            DeepSeek.refill && DeepSeek.refill(8, 'game').catch(() => {});
+            const w = DeepSeek.take && DeepSeek.take('game');
+            if (w && w.length >= tier.wordLenMin && w.length <= tier.wordLenMax + 2
+                && !BOSS_WORDS_SET.has(w)) return w;
         }
-        const pool = (WORDS.tier1.concat(WORDS.tier2, WORDS.tier3, WORDS.tier4))
-            .filter(w => w.length >= tier.wordLenMin && w.length <= tier.wordLenMax);
+        // Filter the pre-built static pool by tier length bounds.
+        const pool = VERSUS_LOCAL_POOL.filter(
+            w => w.length >= tier.wordLenMin && w.length <= tier.wordLenMax
+        );
         if (pool.length === 0) return 'word';
         return pool[(Math.random() * pool.length) | 0];
     }
@@ -4563,7 +4640,7 @@ const Versus = (() => {
         hide('menu'); hide('versus-setup'); hide('versus-over');
         Audio.resume();
         if (DeepSeek && DeepSeek.hasKey && DeepSeek.hasKey()) {
-            DeepSeek.refill && DeepSeek.refill(8).catch(() => {});
+            DeepSeek.refill && DeepSeek.refill(8, 'game').catch(() => {});
         }
     }
     function end(winner) {
