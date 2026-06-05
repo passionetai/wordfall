@@ -939,6 +939,9 @@ function startGame() {
     game.bossActive = null;
     game.detonateT = 0;
     game.bossDefeatedAtLevels = new Set();
+    game.act = 1;
+    game.pendingAct = 1;
+    game.actBreakT = 0;
     game.bombsTypedThisRun = 0;
     game.bossesDefeatedThisRun = 0;
     game.wordsSpawnedThisRun = 0;
@@ -1242,6 +1245,25 @@ function pickBossText() {
     return pool[rngInt(pool.length)];
 }
 
+// ---------- Acts / environments ----------
+// Each boss defeat advances the "act". With one skyline image we re-skin the
+// environment per act using a canvas hue-rotate on the image plus a colour
+// wash + star tint. No new art required — if we later want bespoke skylines
+// per act this is the single place to swap them in.
+const ACTS = [
+    { name: 'NEON CITY',    hue: 0,   wash: 'rgba(10, 14, 26, 0.55)',  star: '#F0F4FF', accent: '#00F0FF' },
+    { name: 'VIOLET DUSK',  hue: -45, wash: 'rgba(26, 10, 34, 0.52)',  star: '#FFC8F0', accent: '#FF2E97' },
+    { name: 'EMBER WASTES', hue: 160, wash: 'rgba(32, 16, 6, 0.52)',   star: '#FFE3B0', accent: '#FF8A00' },
+    { name: 'TOXIC GRID',   hue: 90,  wash: 'rgba(6, 26, 16, 0.52)',   star: '#C8FFE0', accent: '#00FF9F' },
+    { name: 'CRIMSON CORE', hue: 300, wash: 'rgba(32, 6, 12, 0.56)',   star: '#FFC0CB', accent: '#FF1744' },
+    { name: 'GLITCH VOID',  hue: 210, wash: 'rgba(8, 10, 30, 0.58)',   star: '#CFE2FF', accent: '#5AA0FF' },
+];
+function actConfig(actNum) {
+    // act 1-based; cycles through ACTS, getting a touch darker each full cycle.
+    const idx = (actNum - 1) % ACTS.length;
+    return ACTS[idx];
+}
+
 // Boss tier: 0 at L5, 1 at L10, 2 at L15, … Drives every escalation knob.
 function bossTier(level) { return Math.max(0, Math.floor((level - 5) / 5)); }
 
@@ -1333,6 +1355,61 @@ function bossDefeated(boss) {
     game.target = null; game.input = ''; renderInput();
     // Remove boss word
     game.words = game.words.filter(w => w !== boss);
+    // Gate the next zone behind a BEGIN screen so players aren't caught off
+    // guard, and switch the environment to the new act.
+    enterActBreak();
+}
+
+// ---------- Act break (between-zone ready screen) ----------
+function enterActBreak() {
+    const cleared = game.act;
+    game.pendingAct = game.act + 1;
+    game.act = game.pendingAct;          // preview the new zone behind the screen
+    game.state = 'actbreak';
+    game.actBreakT = 9000;               // auto-begins after 9s as a soft-lock guard
+    // Clear any stray words so the new zone starts clean.
+    game.words = [];
+    game.target = null; game.input = ''; renderInput();
+
+    const next = actConfig(game.act);
+    const setTxt = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    setTxt('act-cleared', `ACT ${cleared} CLEAR`);
+    setTxt('act-next-name', next.name);
+    setTxt('act-next-num', `ACT ${game.act}`);
+    setTxt('act-reward', '+1000  ·  2 POWER-UPS EARNED');
+    setTxt('act-countdown', '9');
+    // Theme the BEGIN button + name glow to the new act's accent.
+    const panel = document.getElementById('act-break');
+    if (panel) panel.style.setProperty('--act-accent', next.accent);
+    show('act-break');
+}
+
+function beginNextAct() {
+    if (game.state !== 'actbreak') return;
+    hide('act-break');
+    game.state = 'playing';
+    game.actBreakT = 0;
+    game.spawnCooldown = 700;            // brief grace before words resume
+    game.last = performance.now();       // avoid a dt spike after the pause
+}
+
+function updateActBreak(dt) {
+    // Cosmetic-only update: let the celebration finish, run the countdown.
+    for (const b of game.bullets) {
+        b.life += dt;
+        const t = Math.min(1, b.life / 140);
+        b.x = lerp(game.w / 2, b.target ? b.target.x : b.tx, t);
+        b.y = lerp(game.h - 90, b.target ? b.target.y : b.ty, t);
+    }
+    game.bullets = game.bullets.filter(b => b.life < b.max);
+    updateParticles(dt);
+    updateFloaters(dt);
+    decayVisualState(dt);
+    game.actBreakT -= dt;
+    const cd = Math.ceil(Math.max(0, game.actBreakT) / 1000);
+    const el = document.getElementById('act-countdown');
+    if (el && el.textContent !== String(cd)) el.textContent = cd;
+    if (game.actBreakT <= 0) beginNextAct();
 }
 
 function bossEscaped(boss) {
@@ -1357,6 +1434,14 @@ function bossEscaped(boss) {
 
 // ---------- Input ----------
 function onKey(e) {
+    // Act-break ready screen: Enter / Space / Escape all jump into the next act.
+    if (game.state === 'actbreak') {
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') {
+            e.preventDefault();
+            beginNextAct();
+        }
+        return;
+    }
     if (e.key === 'Escape') {
         // If any overlay-modal is open, Esc closes the topmost one. We check
         // the confirm dialog first (deepest), then daily-played, then stats,
@@ -1892,6 +1977,9 @@ function loop(now) {
         draw(dt);
         drawDetonatedOverlay();
         if (game.detonateT <= 0) gameOver('DETONATED');
+    } else if (game.state === 'actbreak') {
+        updateActBreak(dt);
+        draw(dt);
     } else {
         if (game.state === 'playing') update(dt);
         draw(dt);
@@ -2157,6 +2245,7 @@ function draw(dt) {
 }
 
 function drawBackground(ctx, w, h, dt) {
+    const act = actConfig(game.act || 1);
     if (Assets.bgSkyline) {
         const img = Assets.bgSkyline;
         const ir = img.width / img.height;
@@ -2164,8 +2253,17 @@ function drawBackground(ctx, w, h, dt) {
         let dw, dh, dx, dy;
         if (ir > cr) { dh = h; dw = h * ir; dx = (w - dw) / 2; dy = 0; }
         else         { dw = w; dh = w / ir; dx = 0; dy = (h - dh) / 2; }
-        ctx.drawImage(img, dx, dy, dw, dh);
-        ctx.fillStyle = 'rgba(10, 14, 26, 0.55)';
+        // Re-skin the single skyline per act via a hue-rotate filter.
+        if (act.hue) {
+            ctx.save();
+            ctx.filter = `hue-rotate(${act.hue}deg) saturate(1.15)`;
+            ctx.drawImage(img, dx, dy, dw, dh);
+            ctx.restore();
+        } else {
+            ctx.drawImage(img, dx, dy, dw, dh);
+        }
+        // Per-act colour wash for mood (predictable even if filter unsupported).
+        ctx.fillStyle = act.wash;
         ctx.fillRect(0, 0, w, h);
     } else {
         const grad = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) * 0.7);
@@ -2173,20 +2271,24 @@ function drawBackground(ctx, w, h, dt) {
         grad.addColorStop(1, '#0A0E1A');
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, w, h);
+        // Tint the fallback grid with the act accent.
+        ctx.strokeStyle = withAlpha(act.accent, 0.08);
         const gridSize = 60;
-        ctx.strokeStyle = 'rgba(0, 240, 255, 0.08)';
         ctx.lineWidth = 1;
         ctx.beginPath();
         for (let x = 0; x < w; x += gridSize) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
         for (let y = 0; y < h; y += gridSize) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
         ctx.stroke();
+        // A soft act-accent wash so even the fallback reads as a new zone.
+        ctx.fillStyle = act.wash;
+        ctx.fillRect(0, 0, w, h);
     }
 
     for (const s of game.bgStars) {
         s.y += 0.02 * s.z * dt * (game.freezeTimer > 0 ? 0.25 : 1);
         if (s.y > h) { s.y = -2; s.x = Math.random() * w; }
         ctx.globalAlpha = 0.25;
-        ctx.fillStyle = '#F0F4FF';
+        ctx.fillStyle = act.star;
         ctx.fillRect(s.x, s.y, s.r, s.r);
     }
     ctx.globalAlpha = 1;
@@ -4047,6 +4149,11 @@ function wireStep5DOM() {
     guard('how-btn', () => {
         const howBtn = document.getElementById('how-btn');
         if (howBtn) howBtn.addEventListener('click', () => Tutorial.open(null));
+    });
+
+    guard('act-begin', () => {
+        const b = document.getElementById('act-begin');
+        if (b) b.addEventListener('click', () => beginNextAct());
     });
 
     guard('settings-close', () => {

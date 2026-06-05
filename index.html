@@ -906,6 +906,94 @@
         /* Daily-played panel needs to be positioned so the close X lands
            inside it (the default .panel has no position). */
         .dp-panel { position: relative; }
+
+        /* ---- Act break (between-zone ready screen) ---- */
+        #act-break {
+            --act-accent: var(--neon-cyan);
+            background: rgba(5, 6, 13, 0.4);            /* lighter so the new zone shows through */
+            backdrop-filter: blur(2px);                /* much softer than other modals */
+            -webkit-backdrop-filter: blur(2px);
+        }
+        .act-panel {
+            text-align: center;
+            max-width: min(520px, 92vw);
+            padding: clamp(24px, 4vh, 40px) clamp(24px, 5vw, 48px);
+            background: rgba(10, 14, 26, 0.72);
+            border: 2px solid var(--act-accent);
+            border-radius: 18px;
+            box-shadow: 0 0 40px color-mix(in srgb, var(--act-accent) 35%, transparent);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            animation: act-pop 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+        }
+        @keyframes act-pop {
+            from { transform: scale(0.92); opacity: 0; }
+            to   { transform: scale(1); opacity: 1; }
+        }
+        .act-cleared {
+            font-family: var(--font-ui);
+            font-weight: 700;
+            font-size: clamp(0.8rem, 1.6vw, 1rem);
+            letter-spacing: 4px;
+            color: var(--success-green);
+            text-transform: uppercase;
+            text-shadow: 0 0 12px var(--success-green);
+            margin-bottom: 14px;
+        }
+        .act-entering {
+            font-family: var(--font-ui);
+            font-size: clamp(0.65rem, 1.2vw, 0.8rem);
+            letter-spacing: 5px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }
+        .act-num {
+            font-family: var(--font-game);
+            font-size: clamp(1rem, 2vw, 1.3rem);
+            letter-spacing: 3px;
+            color: var(--act-accent);
+            margin-top: 2px;
+        }
+        .act-panel h2 {
+            font-family: var(--font-display);
+            font-size: clamp(34px, 6vw, 56px);
+            color: var(--act-accent);
+            text-shadow: 0 0 14px var(--act-accent), 0 0 28px var(--act-accent);
+            letter-spacing: 3px;
+            margin: 6px 0 16px;
+            font-weight: 400;
+            line-height: 1.05;
+        }
+        .act-reward {
+            font-family: var(--font-game);
+            font-size: clamp(1rem, 1.8vw, 1.25rem);
+            color: var(--bonus-gold);
+            letter-spacing: 1px;
+            margin-bottom: 22px;
+            text-shadow: 0 0 10px rgba(255, 217, 61, 0.5);
+        }
+        .act-begin-btn {
+            border-color: var(--act-accent) !important;
+            color: var(--act-accent) !important;
+            text-shadow: 0 0 10px var(--act-accent), 0 0 20px var(--act-accent) !important;
+            box-shadow: 0 0 16px color-mix(in srgb, var(--act-accent) 45%, transparent),
+                        inset 0 0 12px color-mix(in srgb, var(--act-accent) 18%, transparent) !important;
+            font-size: clamp(1.2rem, 2.6vw, 1.6rem);
+            padding: clamp(12px, 1.6vh, 16px) clamp(32px, 5vw, 52px);
+        }
+        .act-begin-btn:hover {
+            background: color-mix(in srgb, var(--act-accent) 12%, transparent) !important;
+            box-shadow: 0 0 24px color-mix(in srgb, var(--act-accent) 70%, transparent) !important;
+        }
+        .act-autostart {
+            margin-top: 14px;
+            font-family: var(--font-ui);
+            font-size: 11px;
+            letter-spacing: 1.5px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }
+        .act-autostart span { color: var(--act-accent); font-weight: 700; }
         .confirm-panel h2 {
             font-family: var(--font-display);
             color: var(--bomb-red);
@@ -1548,6 +1636,18 @@
                 <button class="btn" id="again-btn">Play Again</button>
                 <button class="btn ghost" id="menu-btn">Main Menu</button>
             </div>
+        </div>
+    </div>
+
+    <div class="overlay" id="act-break">
+        <div class="panel act-panel">
+            <div class="act-cleared" id="act-cleared">ACT 1 CLEAR</div>
+            <div class="act-entering">ENTERING</div>
+            <div class="act-num" id="act-next-num">ACT 2</div>
+            <h2 id="act-next-name">VIOLET DUSK</h2>
+            <div class="act-reward" id="act-reward">+1000 &middot; 2 POWER-UPS EARNED</div>
+            <button class="btn act-begin-btn" id="act-begin">BEGIN &#9656;</button>
+            <div class="act-autostart">Auto-begins in <span id="act-countdown">9</span>s</div>
         </div>
     </div>
 
