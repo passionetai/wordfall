@@ -331,9 +331,11 @@
 
     <script src="game.js"></script>
     <script>
-        // Register service worker for offline / PWA support
+        // Register service worker for offline / PWA support.
+        // Relative path so it works at a domain root AND under a project
+        // path like /wordfall/ on GitHub Pages (absolute '/sw.js' 404s there).
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').catch(() => {});
+            navigator.serviceWorker.register('./sw.js').catch(() => {});
         }
     </script>
 </body>

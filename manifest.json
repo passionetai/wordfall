@@ -2,7 +2,7 @@
   "name": "Word Fall",
   "short_name": "WordFall",
   "description": "Arcade typing game — words rain down, type to blast them away!",
-  "start_url": "/",
+  "start_url": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0A0E1A",
