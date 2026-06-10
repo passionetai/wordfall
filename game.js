@@ -14,6 +14,36 @@ window.addEventListener('unhandledrejection', (e) => {
     console.error('Word Fall unhandled rejection:', e.reason);
 });
 
+// ---------- localStorage key constants ----------
+// Declared FIRST: the DeepSeek module below reads LS_DEEPSEEK_KEY at
+// module-eval time, so these must precede every IIFE in this file
+// (a later declaration left it in the temporal dead zone and crashed
+// the whole script at startup).
+const LS_HIGH_SCORES        = 'wordfall.high';
+const LS_LIFETIME_STATS     = 'wordfall_lifetime_stats';
+const LS_ACHIEVEMENTS       = 'wordfall_achievements';
+const LS_SETTINGS           = 'wordfall_settings';
+const LS_TUTORIAL_DONE      = 'wordfall_tutorial_completed';
+const LS_DAILY_PREFIX       = 'wordfall_daily_';
+const LS_DEEPSEEK_KEY       = 'wordfall_deepseek_key';
+
+// ---------- Named constants (extracted from magic numbers) ----------
+// Also declared first — the game state object and several IIFEs read
+// these at module-eval time.
+const COMBO_TIMEOUT_MS      = 3200;   // ms before combo resets
+const BULLET_TRAVEL_MS      = 140;    // bullet flight duration
+const BOSS_REGROW_IDLE_MS   = 280;    // boss letter idle → regrow threshold (overridden per boss)
+const FLASH_DECAY_RATE      = 0.003;  // per-ms flash alpha decay
+const SHAKE_DECAY_RATE      = 0.05;   // per-ms shake decay
+const HEART_FX_DURATION_MS  = 400;    // heart-loss animation length
+const TOAST_DURATION_MS     = 1800;   // toast display time
+const FIRE_ANIM_MS          = 100;    // cannon fire animation duration
+const DEFAULT_SPAWN_MS      = 1800;   // base spawn interval
+const WORDS_PER_LEVEL       = 12;     // words to clear per level
+const MAX_MULTIPLIER        = 6.0;    // combo multiplier cap
+const COMBO_PER_POWERUP     = 10;     // combo count that grants a power-up
+const PARTICLE_GRAVITY      = 0.0002; // per-ms² downward acceleration for particles
+
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  MODULE: Data — Word lists, boss vocabulary, achievements  ║
 // ╚══════════════════════════════════════════════════════════════╝
@@ -1197,30 +1227,6 @@ function recentWordTexts() { return new Set(game.words.map(w => w.text)); }
 // net in case the data ever drifts or DeepSeek hallucinates a boss word.
 const BOSS_WORDS_SET = new Set(BOSS_WORDS);
 
-// ---------- Named constants (extracted from magic numbers) ----------
-const COMBO_TIMEOUT_MS      = 3200;   // ms before combo resets
-const BULLET_TRAVEL_MS      = 140;    // bullet flight duration
-const BOSS_REGROW_IDLE_MS   = 280;    // boss letter idle → regrow threshold (overridden per boss)
-const FLASH_DECAY_RATE      = 0.003;  // per-ms flash alpha decay
-const SHAKE_DECAY_RATE      = 0.05;   // per-ms shake decay
-const HEART_FX_DURATION_MS  = 400;    // heart-loss animation length
-const TOAST_DURATION_MS     = 1800;   // toast display time
-const FIRE_ANIM_MS          = 100;    // cannon fire animation duration
-const DEFAULT_SPAWN_MS      = 1800;   // base spawn interval
-const WORDS_PER_LEVEL       = 10;     // words to clear per level
-const MAX_MULTIPLIER        = 6.0;    // combo multiplier cap
-const COMBO_PER_POWERUP     = 10;     // combo count that grants a power-up
-const PARTICLE_GRAVITY      = 0.0002; // per-ms² downward acceleration for particles
-
-// ---------- localStorage key constants ----------
-const LS_HIGH_SCORES        = 'wordfall.high';
-const LS_LIFETIME_STATS     = 'wordfall_lifetime_stats';
-const LS_ACHIEVEMENTS       = 'wordfall_achievements';
-const LS_SETTINGS           = 'wordfall_settings';
-const LS_TUTORIAL_DONE      = 'wordfall_tutorial_completed';
-const LS_DAILY_PREFIX       = 'wordfall_daily_';
-const LS_DEEPSEEK_KEY       = 'wordfall_deepseek_key';
-
 // localPool is pure of game.level — cache the filtered array per level so
 // pickWord (called once per spawn) doesn't re-allocate on every word.
 const _localPoolCache = Object.create(null);
@@ -1598,7 +1604,7 @@ function bossEscaped(boss) {
     game.combo = 0; game.multiplier = 1; game.comboTimer = 0;
     const lossCount = Math.min(2, game.lives);
     for (let i = 0; i < lossCount; i++) {
-        game.heartFx.push({ idx: game.lives - 1 - i, life: 500 }  // Versus uses longer heart anim);
+        game.heartFx.push({ idx: game.lives - 1 - i, life: 500 }); // Versus uses longer heart anim
     }
     game.lives -= 2;
     game.shake = Math.max(game.shake, 28);
@@ -1920,7 +1926,7 @@ function comboMilestoneCheck() {
 }
 
 function levelUpCheck() {
-    const targetLevel = 1 + Math.floor(game.wordsCompleted / 12);
+    const targetLevel = 1 + Math.floor(game.wordsCompleted / WORDS_PER_LEVEL);
     if (targetLevel > game.level) {
         game.level = targetLevel;
         Audio.levelUp();
@@ -4909,7 +4915,7 @@ const Versus = (() => {
         }
         for (let i = 0; i < damage && defender.lives > 0; i++) {
             defender.lives--;
-            defender.heartFx.push({ idx: defender.lives, life: 500 }  // Versus uses longer heart anim);
+            defender.heartFx.push({ idx: defender.lives, life: 500 }); // Versus uses longer heart anim
         }
         defender.combo = 0; defender.multiplier = 1; defender.comboTimer = 0;
         state.shake = Math.max(state.shake, defender.which === 'you' ? 16 : 12);
