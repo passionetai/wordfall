@@ -14,6 +14,10 @@ window.addEventListener('unhandledrejection', (e) => {
     console.error('Word Fall unhandled rejection:', e.reason);
 });
 
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  MODULE: Data — Word lists, boss vocabulary, achievements  ║
+// ╚══════════════════════════════════════════════════════════════╝
+
 // ---------- Word lists ----------
 const WORDS = {
     tier1: ('the and you for are but not all can had has was one our out his her she him who why how new old now use way day man men two big bad red sun sky run cat dog fly jam ice tea pen ink art mix box top map key bus car egg cup bag fox owl bee ant cow pig').split(' '),
@@ -48,6 +52,10 @@ const BOSS_WORDS = [
     'mischievous','paranormal','motivation','innovation',
 ];
 
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  MODULE: DeepSeek — AI word generation (optional)          ║
+// ╚══════════════════════════════════════════════════════════════╝
+
 // ---------- DeepSeek integration (optional, per-user API key) ----------
 // API key lives in localStorage — never in source. Two parallel pools:
 //   game — regular falling words (4-12 letters, mid-difficulty prompt)
@@ -55,7 +63,7 @@ const BOSS_WORDS = [
 // Both refill independently in the background; each call site pulls from
 // the appropriate pool with seamless fallback to local lists.
 const DeepSeek = (() => {
-    const KEY_STORAGE = 'wordfall_deepseek_key';
+    const KEY_STORAGE = LS_DEEPSEEK_KEY;
     const URL = 'https://api.deepseek.com/v1/chat/completions';
     const pools = { game: [], boss: [] };
     const fetching = { game: false, boss: false };
@@ -247,6 +255,10 @@ function preloadAssets(onComplete) {
     });
 }
 
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  MODULE: Audio — Procedural WebAudio sounds                ║
+// ╚══════════════════════════════════════════════════════════════╝
+
 // ---------- Audio (procedural) ----------
 const Audio = (() => {
     let ctx = null, master = null, muted = false;
@@ -259,8 +271,19 @@ const Audio = (() => {
         master.gain.value = 0.35;
         master.connect(ctx.destination);
     }
+    // Respect Settings toggles so procedural audio obeys the same
+    // SFX On/Off and volume sliders as the sample-based AudioManager.
+    function settingsSfxOff() {
+        return typeof Settings !== 'undefined' && Settings.values && !Settings.values.sfxOn;
+    }
+    function settingsVolScale() {
+        if (typeof Settings === 'undefined' || !Settings.values) return 1;
+        return Settings.values.sfxVol / 100;
+    }
+
     function tone(freq, dur, type = 'sine', vol = 0.3, sweepTo = null, startOfs = 0) {
-        if (muted) return; ensure(); if (!ctx) return;
+        if (muted || settingsSfxOff()) return; ensure(); if (!ctx) return;
+        vol *= settingsVolScale();
         const t0 = ctx.currentTime + startOfs;
         const o = ctx.createOscillator();
         const g = ctx.createGain();
@@ -274,7 +297,8 @@ const Audio = (() => {
         o.start(t0); o.stop(t0 + dur + 0.02);
     }
     function noise(dur, vol = 0.3, lp = 1000, startOfs = 0) {
-        if (muted) return; ensure(); if (!ctx) return;
+        if (muted || settingsSfxOff()) return; ensure(); if (!ctx) return;
+        vol *= settingsVolScale();
         const t0 = ctx.currentTime + startOfs;
         const buf = ctx.createBuffer(1, Math.max(1, Math.floor(ctx.sampleRate * dur)), ctx.sampleRate);
         const data = buf.getChannelData(0);
@@ -361,6 +385,10 @@ const Audio = (() => {
         },
     };
 })();
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  MODULE: AudioManager — Sample-based SFX & music           ║
+// ╚══════════════════════════════════════════════════════════════╝
 
 // ---------- Audio Manager (Step 5) ----------
 // Wraps the procedural Audio module from Step 1. Loads sampled SFX + a music
@@ -624,13 +652,13 @@ const LIFETIME_DEFAULTS = {
 };
 function loadLifetime() {
     try {
-        const raw = localStorage.getItem('wordfall_lifetime_stats');
+        const raw = localStorage.getItem(LS_LIFETIME_STATS);
         if (!raw) return { ...LIFETIME_DEFAULTS };
         return Object.assign({ ...LIFETIME_DEFAULTS }, JSON.parse(raw));
     } catch (e) { return { ...LIFETIME_DEFAULTS }; }
 }
 function saveLifetime(stats) {
-    try { localStorage.setItem('wordfall_lifetime_stats', JSON.stringify(stats)); } catch (e) {}
+    try { localStorage.setItem(LS_LIFETIME_STATS, JSON.stringify(stats)); } catch (e) {}
 }
 
 // ---------- Achievements ----------
@@ -646,13 +674,13 @@ const ACHIEVEMENTS = [
 ];
 function loadAchievementsState() {
     try {
-        const raw = localStorage.getItem('wordfall_achievements');
+        const raw = localStorage.getItem(LS_ACHIEVEMENTS);
         if (!raw) return {};
         return JSON.parse(raw);
     } catch (e) { return {}; }
 }
 function saveAchievementsState(map) {
-    try { localStorage.setItem('wordfall_achievements', JSON.stringify(map)); } catch (e) {}
+    try { localStorage.setItem(LS_ACHIEVEMENTS, JSON.stringify(map)); } catch (e) {}
 }
 const _achQueue = [];
 function unlockAchievement(id) {
@@ -770,7 +798,7 @@ const game = {
     score: 0, level: 1, lives: 5,
     combo: 0, bestCombo: 0,
     multiplier: 1, comboTimer: 0,
-    spawnCooldown: 0, spawnInterval: 1800,
+    spawnCooldown: 0, spawnInterval: DEFAULT_SPAWN_MS,
     freezeTimer: 0, shieldTimer: 0,
     powerups: { freeze: 0, bomb: 0, shield: 0 },
     shake: 0, flash: 0, flashColor: '#ffffff',
@@ -810,13 +838,13 @@ const game = {
 // ---------- Persistence ----------
 function loadHigh() {
     try {
-        const raw = localStorage.getItem('wordfall.high');
+        const raw = localStorage.getItem(LS_HIGH_SCORES);
         if (!raw) return { score: 0, wpm: 0, combo: 0 };
         return JSON.parse(raw);
     } catch (e) { return { score: 0, wpm: 0, combo: 0 }; }
 }
 function saveHigh() {
-    try { localStorage.setItem('wordfall.high', JSON.stringify(game.high)); } catch (e) {}
+    try { localStorage.setItem(LS_HIGH_SCORES, JSON.stringify(game.high)); } catch (e) {}
 }
 
 // ---------- Setup ----------
@@ -943,6 +971,51 @@ function seedStars() {
 }
 
 // ---------- Game flow ----------
+
+// ---------- State factory ----------
+// Returns a clean game-state object. Called by startGame() and init()
+// to avoid stale-state bugs from missed resets.
+function createFreshPlayState(mode) {
+    return {
+        score: 0,
+        level: 1,
+        lives: mode === 'hardcore' ? 1 : (mode === 'sprint' ? 3 : 5),
+        words: [],
+        bullets: [],
+        particles: [],
+        floaters: [],
+        heartFx: [],
+        target: null,
+        input: '',
+        combo: 0,
+        multiplier: 1,
+        comboTimer: 0,
+        spawnCooldown: 0,
+        spawnInterval: DEFAULT_SPAWN_MS,
+        wordsForLevel: WORDS_PER_LEVEL,
+        wordsCleared: 0,
+        wordsSpawnedThisRun: 0,
+        totalWordsThisRun: 0,
+        totalBombsThisRun: 0,
+        totalBossesThisRun: 0,
+        fireT: 0,
+        shake: 0,
+        flash: 0,
+        flashColor: '#FF1744',
+        freezeTimer: 0,
+        shieldTimer: 0,
+        powerups: { freeze: 0, bomb: 0, shield: 0 },
+        charsTyped: 0,
+        longestCombo: 0,
+        longestWord: '',
+        sprintTimeLeft: mode === 'sprint' ? 90000 : 0,
+        bossState: 'none',
+        bossActive: null,
+        bossWarnT: 0,
+        act: 1,
+    };
+}
+
 function startGame() {
     // Daily mode entry guard — if already played today, surface the daily-played modal.
     if (game.mode === 'daily') {
@@ -959,6 +1032,8 @@ function startGame() {
         game.isDaily = false;
     }
 
+    // Apply fresh state from factory
+    Object.assign(game, createFreshPlayState(game.mode));
     game.state = 'playing';
     if (typeof AmbientLetters !== 'undefined') AmbientLetters.stop();
     AudioManager.setActiveMusic('game');
@@ -1121,6 +1196,31 @@ function recentWordTexts() { return new Set(game.words.map(w => w.text)); }
 // Boss words must never appear as regular falling words — a thin safety
 // net in case the data ever drifts or DeepSeek hallucinates a boss word.
 const BOSS_WORDS_SET = new Set(BOSS_WORDS);
+
+// ---------- Named constants (extracted from magic numbers) ----------
+const COMBO_TIMEOUT_MS      = 3200;   // ms before combo resets
+const BULLET_TRAVEL_MS      = 140;    // bullet flight duration
+const BOSS_REGROW_IDLE_MS   = 280;    // boss letter idle → regrow threshold (overridden per boss)
+const FLASH_DECAY_RATE      = 0.003;  // per-ms flash alpha decay
+const SHAKE_DECAY_RATE      = 0.05;   // per-ms shake decay
+const HEART_FX_DURATION_MS  = 400;    // heart-loss animation length
+const TOAST_DURATION_MS     = 1800;   // toast display time
+const FIRE_ANIM_MS          = 100;    // cannon fire animation duration
+const DEFAULT_SPAWN_MS      = 1800;   // base spawn interval
+const WORDS_PER_LEVEL       = 10;     // words to clear per level
+const MAX_MULTIPLIER        = 6.0;    // combo multiplier cap
+const COMBO_PER_POWERUP     = 10;     // combo count that grants a power-up
+const PARTICLE_GRAVITY      = 0.0002; // per-ms² downward acceleration for particles
+
+// ---------- localStorage key constants ----------
+const LS_HIGH_SCORES        = 'wordfall.high';
+const LS_LIFETIME_STATS     = 'wordfall_lifetime_stats';
+const LS_ACHIEVEMENTS       = 'wordfall_achievements';
+const LS_SETTINGS           = 'wordfall_settings';
+const LS_TUTORIAL_DONE      = 'wordfall_tutorial_completed';
+const LS_DAILY_PREFIX       = 'wordfall_daily_';
+const LS_DEEPSEEK_KEY       = 'wordfall_deepseek_key';
+
 // localPool is pure of game.level — cache the filtered array per level so
 // pickWord (called once per spawn) doesn't re-allocate on every word.
 const _localPoolCache = Object.create(null);
@@ -1477,7 +1577,7 @@ function updateActBreak(dt) {
     // Cosmetic-only update: let the celebration finish, run the countdown.
     for (const b of game.bullets) {
         b.life += dt;
-        const t = Math.min(1, b.life / 140);
+        const t = Math.min(1, b.life / BULLET_TRAVEL_MS);
         b.x = lerp(game.w / 2, b.target ? b.target.x : b.tx, t);
         b.y = lerp(game.h - 90, b.target ? b.target.y : b.ty, t);
     }
@@ -1498,7 +1598,7 @@ function bossEscaped(boss) {
     game.combo = 0; game.multiplier = 1; game.comboTimer = 0;
     const lossCount = Math.min(2, game.lives);
     for (let i = 0; i < lossCount; i++) {
-        game.heartFx.push({ idx: game.lives - 1 - i, life: 500 });
+        game.heartFx.push({ idx: game.lives - 1 - i, life: 500 }  // Versus uses longer heart anim);
     }
     game.lives -= 2;
     game.shake = Math.max(game.shake, 28);
@@ -1724,7 +1824,7 @@ function completeWord(w) {
     game.combo++;
     if (game.combo > game.bestCombo) game.bestCombo = game.combo;
     game.multiplier = 1 + Math.min(game.combo, 50) * 0.1;
-    game.comboTimer = 3200;
+    game.comboTimer = COMBO_TIMEOUT_MS;
     game.fireT = 100;
 
     // Per-run trackers (Step 4)
@@ -1892,7 +1992,7 @@ function missWord(w) {
 function applySingleLifeLoss(flashColor) {
     const lostIdx = game.lives - 1;
     game.lives--;
-    game.heartFx.push({ idx: lostIdx, life: 400 });
+    game.heartFx.push({ idx: lostIdx, life: HEART_FX_DURATION_MS });
     game.combo = 0; game.multiplier = 1; game.comboTimer = 0;
     Audio.miss();
     game.shake = Math.max(game.shake, 18);
@@ -2131,7 +2231,7 @@ function update(dt) {
         // Skip the rest of update (no spawn / no normal falling).
         for (const b of game.bullets) {
             b.life += dt;
-            const t = Math.min(1, b.life / 140);
+            const t = Math.min(1, b.life / BULLET_TRAVEL_MS);
             b.x = lerp(game.w / 2, b.target ? b.target.x : b.tx, t);
             b.y = lerp(game.h - 90, b.target ? b.target.y : b.ty, t);
         }
@@ -2238,7 +2338,7 @@ function update(dt) {
 
     for (const b of game.bullets) {
         b.life += dt;
-        const t = Math.min(1, b.life / 140);
+        const t = Math.min(1, b.life / BULLET_TRAVEL_MS);
         b.x = lerp(game.w / 2, b.target ? b.target.x : b.tx, t);
         b.y = lerp(game.h - 90, b.target ? b.target.y : b.ty, t);
     }
@@ -2264,7 +2364,7 @@ function updateParticles(dt) {
     for (const p of game.particles) {
         p.x += p.vx * dt;
         p.y += p.vy * dt;
-        p.vy += 0.0002 * dt;
+        p.vy += PARTICLE_GRAVITY * dt;
         p.rot += p.spin * dt;
         p.life -= dt;
     }
@@ -2280,11 +2380,32 @@ function updateFloaters(dt) {
 }
 
 function decayVisualState(dt) {
-    game.shake = Math.max(0, game.shake - dt * 0.05);
-    game.flash = Math.max(0, game.flash - dt * 0.003);
+    game.shake = Math.max(0, game.shake - dt * SHAKE_DECAY_RATE);
+    game.flash = Math.max(0, game.flash - dt * FLASH_DECAY_RATE);
 }
 
 function lerp(a, b, t) { return a + (b - a) * t; }
+
+
+// ---------- Colorblind mode helpers ----------
+function isColorblind() { return !!Settings.values.colorblind; }
+
+// Returns a prefix icon/label for each word type in colorblind mode
+function wordTypeIndicator(type) {
+    if (!isColorblind()) return '';
+    switch (type) {
+        case 'bomb':  return '⚠ ';
+        case 'bonus': return '★ ';
+        case 'twin':  return '⇆ ';
+        case 'decoy': return '~ ';
+        case 'boss':  return '◆ ';
+        default:      return '';
+    }
+}
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  MODULE: Rendering — Canvas draw functions                  ║
+// ╚══════════════════════════════════════════════════════════════╝
 
 // ---------- Draw ----------
 function drawLoadingScreen() {
@@ -2423,7 +2544,7 @@ function drawBackground(ctx, w, h, dt) {
 function cannonPos() { return { x: game.w / 2, y: game.h - 60 }; }
 function cannonFireScale() {
     if (game.fireT <= 0) return 1;
-    const t = 1 - game.fireT / 100;
+    const t = 1 - game.fireT / FIRE_ANIM_MS;
     const tri = t < 0.5 ? t / 0.5 : (1 - t) / 0.5;
     return 1 + 0.08 * tri;
 }
@@ -2559,6 +2680,23 @@ function drawWords(ctx) {
         const isTarget = (w === game.target);
         const proximity = Math.min(1, w.y / floorY());
         const inDanger = (w.y / game.h) > 0.8;
+
+    // Colorblind indicator: draw a shape/label above non-normal words
+    if (isColorblind() && w.type !== 'boss') {
+        const indicator = wordTypeIndicator(w.type);
+        if (indicator) {
+            ctx.save();
+            ctx.font = `${Math.round(w.size * 0.6)}px VT323, monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillStyle = '#F0F4FF';
+            ctx.globalAlpha = 0.85;
+            ctx.fillText(indicator.trim(), x, y - w.size * 0.55);
+            ctx.globalAlpha = 1;
+            ctx.restore();
+        }
+    }
+
 
         ctx.save();
         ctx.textAlign = 'center';
@@ -2906,7 +3044,7 @@ function drawHearts(ctx, rightX, centerY) {
         const fx = game.heartFx.find(h => h.idx === i);
         let scale = 1, color = '#FF2E97';
         if (fx) {
-            const t = 1 - fx.life / 400;
+            const t = 1 - fx.life / HEART_FX_DURATION_MS;
             scale = 1 + 0.5 * Math.sin(t * Math.PI);
             color = '#F0F4FF';
         } else if (lost) {
@@ -3076,7 +3214,7 @@ function drawPowerupSlots(ctx, x0, y0, totalW) {
 
 function drawComboReadout(ctx, rightX, y0) {
     const barW = 220, barH = 6;
-    const fill = Math.max(0, Math.min(1, game.comboTimer / 3200));
+    const fill = Math.max(0, Math.min(1, game.comboTimer / COMBO_TIMEOUT_MS));
     const x = rightX - barW;
 
     ctx.textAlign = 'right';
@@ -3187,6 +3325,7 @@ function drawDetonatedOverlay() {
 
 // ---------- Helpers ----------
 function roundRect(ctx, x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
     ctx.beginPath();
     ctx.moveTo(x + r, y);
     ctx.lineTo(x + w - r, y);
@@ -3285,7 +3424,7 @@ function generateShareCard(stats) {
     ctx.fillStyle = 'rgba(255, 46, 151, 0.2)';
     ctx.strokeStyle = '#FF2E97';
     ctx.lineWidth = 1;
-    roundRectInto(ctx, bx, by, bw, badgeH, 999);
+    roundRect(ctx, bx, by, bw, badgeH, 999);
     ctx.fill(); ctx.stroke();
     ctx.fillStyle = '#FF2E97';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -3325,7 +3464,7 @@ function generateShareCard(stats) {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
         ctx.strokeStyle = 'rgba(0, 240, 255, 0.5)';
         ctx.lineWidth = 1;
-        roundRectInto(ctx, px, pY, plateW, plateH, 12);
+        roundRect(ctx, px, pY, plateW, plateH, 12);
         ctx.fill(); ctx.stroke();
         // label
         ctx.font = "400 18px VT323, monospace";
@@ -3378,7 +3517,7 @@ function fitText(ctx, str, maxW) {
     return s + '…';
 }
 
-function roundRectInto(ctx, x, y, w, h, r) {
+function roundRect(ctx, x, y, w, h, r) {
     r = Math.min(r, w / 2, h / 2);
     ctx.beginPath();
     ctx.moveTo(x + r, y);
@@ -3638,7 +3777,7 @@ function drawTouchKeyboard(ctx) {
         ctx.fillStyle = press ? 'rgba(0, 240, 255, 0.3)' : 'rgba(0, 0, 0, 0.6)';
         ctx.strokeStyle = 'rgba(0, 240, 255, 0.4)';
         ctx.lineWidth = 1;
-        roundRectInto(ctx, dx, dy, dw, dh, 6);
+        roundRect(ctx, dx, dy, dw, dh, 6);
         ctx.fill(); ctx.stroke();
         ctx.font = '400 22px VT323, monospace';
         ctx.textAlign = 'center';
@@ -3725,7 +3864,7 @@ function drawTouchPauseButton(ctx) {
     ctx.fillStyle = 'rgba(10, 14, 26, 0.7)';
     ctx.strokeStyle = '#00F0FF';
     ctx.lineWidth = 1.5;
-    roundRectInto(ctx, x, y, size, size, 8);
+    roundRect(ctx, x, y, size, size, 8);
     ctx.fill(); ctx.stroke();
     ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 8;
     ctx.fillStyle = '#00F0FF';
@@ -3916,10 +4055,14 @@ function drawFPS(ctx) {
 }
 
 // ====================================================================
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  MODULE: Settings — User preferences persistence           ║
+// ╚══════════════════════════════════════════════════════════════╝
+
 // Step 5 — Settings module
 // ====================================================================
 const Settings = (() => {
-    const KEY = 'wordfall_settings';
+    const KEY = LS_SETTINGS;
     const defaults = {
         musicVol: 40,
         sfxVol: 60,
@@ -3927,6 +4070,7 @@ const Settings = (() => {
         sfxOn: true,
         reduceMotion: false,
         showFPS: false,
+        colorblind: false,
     };
     const values = { ...defaults };
 
@@ -4026,7 +4170,7 @@ const Tutorial = (() => {
     function close(skipped) {
         hide('tutorial');
         cancelAnimationFrame(raf); raf = 0;
-        try { localStorage.setItem('wordfall_tutorial_completed', 'true'); } catch (e) {}
+        try { localStorage.setItem(LS_TUTORIAL_DONE, 'true'); } catch (e) {}
         const cb = onDone; onDone = null;
         if (cb) {
             cb(skipped);
@@ -4203,7 +4347,7 @@ function onPlayClicked() {
         Versus.openPicker();
         return;
     }
-    const done = localStorage.getItem('wordfall_tutorial_completed') === 'true';
+    const done = localStorage.getItem(LS_TUTORIAL_DONE) === 'true';
     if (!done) {
         Tutorial.open((skipped) => { startGame(); });
     } else {
@@ -4363,6 +4507,7 @@ function wireStep5DOM() {
         bindToggle('sfx-on',        'sfxOn');
         bindToggle('reduce-motion', 'reduceMotion');
         bindToggle('show-fps',      'showFPS');
+        bindToggle('colorblind',    'colorblind');
     });
 
     guard('reset-stats', () => {
@@ -4373,13 +4518,13 @@ function wireStep5DOM() {
         const confirmYes = document.getElementById('confirm-reset-yes');
         if (confirmYes) confirmYes.addEventListener('click', () => {
             try {
-                localStorage.removeItem('wordfall.high');
-                localStorage.removeItem('wordfall_lifetime_stats');
-                localStorage.removeItem('wordfall_achievements');
+                localStorage.removeItem(LS_HIGH_SCORES);
+                localStorage.removeItem(LS_LIFETIME_STATS);
+                localStorage.removeItem(LS_ACHIEVEMENTS);
                 const keysToDelete = [];
                 for (let i = 0; i < localStorage.length; i++) {
                     const k = localStorage.key(i);
-                    if (k && k.startsWith('wordfall_daily_')) keysToDelete.push(k);
+                    if (k && k.startsWith(LS_DAILY_PREFIX)) keysToDelete.push(k);
                 }
                 keysToDelete.forEach(k => localStorage.removeItem(k));
             } catch (e) {}
@@ -4446,6 +4591,7 @@ function populateSettingsModal() {
         'sfx-on':   Settings.values.sfxOn,
         'reduce-motion': Settings.values.reduceMotion,
         'show-fps':      Settings.values.showFPS,
+        'colorblind':    Settings.values.colorblind,
     };
     Object.entries(togs).forEach(([id, v]) => {
         const el = document.getElementById(id);
@@ -4454,6 +4600,10 @@ function populateSettingsModal() {
 }
 
 // ====================================================================
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  MODULE: Versus — Player vs CPU bot mode                   ║
+// ╚══════════════════════════════════════════════════════════════╝
+
 // Versus mode — you vs CPU bot
 //   Phase 1: bilateral defense duel. Words spawn on each side flying
 //   toward that side's shield; both players type to defend; whoever
@@ -4663,8 +4813,8 @@ const Versus = (() => {
             if (state.endingT <= 0 && ov && !ov.classList.contains('show')) showResult();
             for (const w of state.words) { w.x += w.vx * dt; w.wiggle += dt * 0.005; }
             updateParticlesAndFloaters(dt);
-            state.shake = Math.max(0, state.shake - dt * 0.05);
-            state.flash = Math.max(0, state.flash - dt * 0.003);
+            state.shake = Math.max(0, state.shake - dt * SHAKE_DECAY_RATE);
+            state.flash = Math.max(0, state.flash - dt * FLASH_DECAY_RATE);
             return;
         }
 
@@ -4721,13 +4871,13 @@ const Versus = (() => {
         }
         state.words = state.words.filter(w => !w._dead);
         updateParticlesAndFloaters(dt);
-        state.shake = Math.max(0, state.shake - dt * 0.05);
-        state.flash = Math.max(0, state.flash - dt * 0.003);
+        state.shake = Math.max(0, state.shake - dt * SHAKE_DECAY_RATE);
+        state.flash = Math.max(0, state.flash - dt * FLASH_DECAY_RATE);
     }
 
     function updateParticlesAndFloaters(dt) {
         for (const p of state.particles) {
-            p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 0.0002 * dt; p.life -= dt;
+            p.x += p.vx * dt; p.y += p.vy * dt; p.vy += PARTICLE_GRAVITY * dt; p.life -= dt;
         }
         state.particles = state.particles.filter(p => p.life > 0);
         for (const f of state.floaters) {
@@ -4759,7 +4909,7 @@ const Versus = (() => {
         }
         for (let i = 0; i < damage && defender.lives > 0; i++) {
             defender.lives--;
-            defender.heartFx.push({ idx: defender.lives, life: 500 });
+            defender.heartFx.push({ idx: defender.lives, life: 500 }  // Versus uses longer heart anim);
         }
         defender.combo = 0; defender.multiplier = 1; defender.comboTimer = 0;
         state.shake = Math.max(state.shake, defender.which === 'you' ? 16 : 12);
@@ -5091,7 +5241,7 @@ const Versus = (() => {
             const fx = side.heartFx.find(h => h.idx === i);
             let scale = 1, color = side.which === 'you' ? '#00F0FF' : '#FF2E97';
             if (fx) {
-                const t = 1 - fx.life / 500;
+                const t = 1 - fx.life / 500  /* Versus heart anim */;
                 scale = 1 + 0.6 * Math.sin(t * Math.PI);
                 color = '#F0F4FF';
             } else if (lost) {
