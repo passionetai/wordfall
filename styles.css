@@ -395,6 +395,22 @@ canvas {
     width: 60px; height: 20px;
 }
 #daily-spark.has-data { display: inline-block; }
+.daily-streak {
+    margin-top: 4px;
+    font-size: clamp(0.6rem, 0.9vw, 0.7rem);
+    color: var(--bonus-gold);
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-shadow: 0 0 8px rgba(255, 217, 61, 0.5);
+}
+.daily-streak:empty { display: none; }
+.daily-streak.big {
+    font-family: var(--font-game);
+    font-size: clamp(1rem, 1.8vw, 1.25rem);
+    letter-spacing: 2px;
+    margin: 4px 0 8px;
+    text-shadow: 0 0 12px rgba(255, 217, 61, 0.6);
+}
 .daily-countdown {
     font-family: var(--font-game);
     font-size: 14px;
@@ -604,6 +620,30 @@ canvas {
     opacity: 1;
     transform: translate(-50%, 0);
 }
+
+/* PWA update prompt — like share-toast but clickable, gold, and persistent
+   (no auto-dismiss: it stays until the player refreshes). */
+#update-toast {
+    position: fixed;
+    bottom: 24px; left: 50%; transform: translate(-50%, 60px);
+    background: rgba(255, 217, 61, 0.96);
+    color: #0A0E1A;
+    font-family: var(--font-ui);
+    font-weight: 600;
+    font-size: 15px;
+    padding: 12px 20px;
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(255, 217, 61, 0.45);
+    opacity: 0;
+    cursor: pointer;
+    z-index: 40;
+    transition: opacity 0.25s, transform 0.25s;
+}
+#update-toast.show {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+#update-toast:hover { filter: brightness(1.06); }
 
 #ach-toast {
     position: fixed;
