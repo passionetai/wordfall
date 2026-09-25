@@ -75,6 +75,7 @@
                     <span class="name">DAILY</span>
                     <span class="desc" id="daily-date">—</span>
                     <span class="daily-state" id="daily-state"></span>
+                    <span class="daily-streak" id="daily-streak"></span>
                     <canvas id="daily-spark" width="60" height="20"></canvas>
                     <span class="daily-countdown" id="daily-countdown"></span>
                 </button>
@@ -171,6 +172,12 @@
                     <div class="vs-tier-desc">Three at once. Long, nasty words.</div>
                 </button>
             </div>
+            <div class="setting-help" id="vs-howto">
+                <b>Defend:</b> type incoming words before they hit your shield.
+                <b>Attack:</b> type a word from your rack (bottom-left) to fling
+                it at the bot &mdash; stack attacks to overload it. Combos make
+                your attacks fly faster.
+            </div>
             <div class="setting-help" id="vs-deepseek-hint">
                 Tip: save a DeepSeek key in Settings for richer bot vocabulary.
             </div>
@@ -215,6 +222,7 @@
                 <div class="stat"><div class="k">WPM</div><div class="v" id="dp-wpm">0</div></div>
                 <div class="stat"><div class="k">Best Combo</div><div class="v" id="dp-combo">0</div></div>
             </div>
+            <div class="daily-streak big" id="dp-streak"></div>
             <div class="next-daily">NEXT DAILY IN&nbsp;<span id="dp-countdown">--:--:--</span></div>
             <div class="btn-row">
                 <button class="btn" id="dp-share-btn">Share Result</button>
@@ -334,8 +342,37 @@
         // Register service worker for offline / PWA support.
         // Relative path so it works at a domain root AND under a project
         // path like /wordfall/ on GitHub Pages (absolute '/sw.js' 404s there).
+        //
+        // This block is intentionally independent of game.js: if a deploy
+        // ever ships a broken game script again, the update toast still
+        // works and offers the player the fixed build.
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('./sw.js').catch(() => {});
+            const showUpdateToast = () => {
+                if (document.getElementById('update-toast')) return;
+                const t = document.createElement('div');
+                t.id = 'update-toast';
+                t.setAttribute('role', 'status');
+                t.innerHTML = '✨ New version ready — <b>tap to refresh</b>';
+                t.addEventListener('click', () => location.reload());
+                document.body.appendChild(t);
+                requestAnimationFrame(() => t.classList.add('show'));
+            };
+            navigator.serviceWorker.register('./sw.js').then((reg) => {
+                // A worker already waiting means an update arrived while
+                // no page was open to see the statechange.
+                if (reg.waiting && navigator.serviceWorker.controller) showUpdateToast();
+                reg.addEventListener('updatefound', () => {
+                    const nw = reg.installing;
+                    if (!nw) return;
+                    nw.addEventListener('statechange', () => {
+                        // 'activated' + an existing controller = an UPDATE
+                        // (first-ever install has no controller — no toast).
+                        if (nw.state === 'activated' && navigator.serviceWorker.controller) {
+                            showUpdateToast();
+                        }
+                    });
+                });
+            }).catch(() => {});
         }
     </script>
 </body>

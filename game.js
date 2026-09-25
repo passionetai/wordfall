@@ -768,6 +768,21 @@ function last7DailyScores() {
     }
     return out;
 }
+// Current daily streak: consecutive played days ending today — or ending
+// yesterday if today hasn't been played yet (an unplayed today doesn't
+// break the streak until the UTC day rolls over).
+function dailyStreak() {
+    const now = new Date();
+    const keyFor = (offset) => {
+        const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - offset));
+        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    };
+    let offset = getDailyResult(keyFor(0)) ? 0 : 1;
+    let streak = 0;
+    while (streak < 3650 && getDailyResult(keyFor(offset + streak))) streak++;
+    return streak;
+}
+
 function msUntilNextUTCMidnight() {
     const now = new Date();
     const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0);
@@ -3638,6 +3653,12 @@ function refreshDailyCard() {
         stateEl.textContent = '';
         cdEl.textContent = '';
     }
+    // Streak badge — shown from 2 days up (a 1-day "streak" is just a play).
+    const streakEl = document.getElementById('daily-streak');
+    if (streakEl) {
+        const streak = dailyStreak();
+        streakEl.textContent = streak >= 2 ? `\u{1F525} ${streak}-day streak` : '';
+    }
     drawDailySparkline(sparkCv);
 }
 function drawDailySparkline(canvasEl) {
@@ -3689,6 +3710,11 @@ function showDailyPlayedModal(result) {
     document.getElementById('dp-wpm').textContent   = result.wpm   || 0;
     document.getElementById('dp-combo').textContent = result.combo || 0;
     document.getElementById('dp-countdown').textContent = formatHMS(msUntilNextUTCMidnight());
+    const dpStreak = document.getElementById('dp-streak');
+    if (dpStreak) {
+        const streak = dailyStreak();
+        dpStreak.textContent = streak >= 2 ? `\u{1F525} ${streak}-DAY STREAK` : '';
+    }
     show('daily-played');
 }
 
@@ -4621,7 +4647,10 @@ const Versus = (() => {
     //   botCps         — bot 'types' at this characters/sec (defends bot side)
     //   travelMs       — how long a word takes edge-to-edge (player reading time)
     //   playerSpawnMs  — cadence between words spawned AT the player
-    //   botSpawnMs     — cadence between words spawned AT the bot
+    //   rackSize       — attack-rack slots (Phase 2: your offense)
+    //   rackRefillMs   — delay before an empty rack slot refills
+    //   rackBombRate   — chance a rack word is a bomb (2 damage)
+    //   botMissRate    — chance the bot outright fails to defend a word
     //   maxYouOnScreen — concurrency cap for incoming-at-you (set to 1 for
     //                    a TRUE rookie experience: one word at a time)
     //   maxCpuOnScreen — same for the bot side
@@ -4637,24 +4666,31 @@ const Versus = (() => {
     const TIERS = {
         rookie: {
             label: 'ROOKIE',  approxWpm: 20,
-            botCps: 1.7,   travelMs: 7200, playerSpawnMs: 3200, botSpawnMs: 3000,
+            botCps: 1.7,   travelMs: 7200, playerSpawnMs: 3200,
             maxYouOnScreen: 1, maxCpuOnScreen: 1,
             wordLenMin: 4, wordLenMax: 6,
             specialWeights: { normal: 0.92, bonus: 0.08 },
+            // Phase 2 — attack racks
+            rackSize: 2, rackRefillMs: 1200, rackBombRate: 0,
+            botMissRate: 0.20,   // rookie bot just blows it sometimes
         },
         rival: {
             label: 'RIVAL',   approxWpm: 45,
-            botCps: 3.8,   travelMs: 5500, playerSpawnMs: 2200, botSpawnMs: 2000,
+            botCps: 3.8,   travelMs: 5500, playerSpawnMs: 2200,
             maxYouOnScreen: 2, maxCpuOnScreen: 2,
             wordLenMin: 5, wordLenMax: 8,
             specialWeights: { normal: 0.74, bonus: 0.10, bomb: 0.10, decoy: 0.06 },
+            rackSize: 3, rackRefillMs: 1000, rackBombRate: 0.12,
+            botMissRate: 0.10,
         },
         nemesis: {
             label: 'NEMESIS', approxWpm: 80,
-            botCps: 6.5,   travelMs: 4200, playerSpawnMs: 1500, botSpawnMs: 1400,
+            botCps: 6.5,   travelMs: 4200, playerSpawnMs: 1500,
             maxYouOnScreen: 3, maxCpuOnScreen: 3,
             wordLenMin: 6, wordLenMax: 11,
             specialWeights: { normal: 0.55, bonus: 0.10, bomb: 0.20, twin: 0.10, decoy: 0.05 },
+            rackSize: 3, rackRefillMs: 800, rackBombRate: 0.15,
+            botMissRate: 0.04,
         },
     };
     const MAX_LIVES = 4;
@@ -4671,7 +4707,6 @@ const Versus = (() => {
         particles: [],
         floaters: [],
         spawnYou: 0,
-        spawnCpu: 0,
         elapsed: 0,
         startedAt: 0,
         winner: null,
@@ -4690,6 +4725,15 @@ const Versus = (() => {
             charsTyped: 0, wordsTyped: 0,
             freezeTimer: 0, shieldTimer: 0,
             powerups: { freeze: 0, shield: 0 },
+            // Phase 2 — attack rack (player side only)
+            rack: [],            // [{text, typed, isBomb}]
+            rackTarget: null,    // index into rack while typing an attack
+            rackRefillT: 0,
+            attacksLanded: 0,
+            // Bot serial-typing queue (cpu side only): the bot types ONE
+            // word at a time like a real person, so stacking attacks
+            // overloads it — that's the player's offensive strategy.
+            busyUntil: 0,
         };
     }
 
@@ -4763,12 +4807,91 @@ const Versus = (() => {
     }
 
     function planBotCompletion(w, tier) {
+        // Outright miss: the bot 'gives up' on this word and it lands.
+        // This is the player's reliable damage avenue at lower tiers, where
+        // the bot otherwise has time to type everything thrown at it.
+        if (Math.random() < tier.botMissRate) {
+            w.bot = { miss: true, completionAt: Infinity };
+            return;
+        }
         const lenFactor = 0.85 + (w.text.length / 8) * 0.5;
         const adj = tier.botCps * lenFactor * (w.type === 'decoy' ? 0.3 : 1);
         const fumble = Math.random() < 0.07 ? 0.6 : 0;
         const sec = (w.text.length / Math.max(1.2, adj)) + fumble;
-        const startedAt = performance.now() + 280;
-        w.bot = { cps: adj, startedAt, completionAt: startedAt + sec * 1000, fumbled: fumble > 0 };
+        // SERIAL queue: the bot can only type one word at a time. Each new
+        // word starts after the previous one finishes (or now, if idle) —
+        // so launching several attacks in quick succession overloads it and
+        // the overflow lands. This is the core Phase-2 strategy.
+        const now = performance.now();
+        const startAt = Math.max(now + 280, state.cpu.busyUntil);
+        const completionAt = startAt + sec * 1000;
+        state.cpu.busyUntil = completionAt;
+        w.bot = { cps: adj, startedAt: startAt, completionAt, fumbled: fumble > 0 };
+    }
+
+    // ----- Attack rack (Phase 2) -----
+    // Rack words need distinct first letters from each other so typing is
+    // unambiguous (incoming words always take priority over the rack).
+    function pickRackText(tier) {
+        const usedFirst = new Set(state.you.rack.map(r => r.text[0]));
+        for (let tries = 0; tries < 24; tries++) {
+            const t = pickText(tier);
+            if (!usedFirst.has(t[0])) return t;
+        }
+        return pickText(tier); // give up on distinctness rather than loop forever
+    }
+    function fillRack(tier) {
+        while (state.you.rack.length < tier.rackSize) {
+            state.you.rack.push({
+                text: pickRackText(tier),
+                typed: 0,
+                isBomb: Math.random() < tier.rackBombRate,
+            });
+        }
+    }
+    function attacksInFlight() {
+        return state.words.reduce((n, w) => n + (w.owner === 'cpu' && !w._dead ? 1 : 0), 0);
+    }
+    function launchAttack(rackIdx, tier) {
+        const slot = state.you.rack[rackIdx];
+        if (!slot) return;
+        state.you.rack.splice(rackIdx, 1);
+        state.you.rackTarget = null;
+        state.you.input = '';
+        state.you.rackRefillT = tier.rackRefillMs;
+
+        const text = slot.text;
+        const type = slot.isBomb ? 'bomb' : 'normal';
+        const fontSize = 24 + Math.max(0, 12 - text.length) * 1.4;
+        game.ctx.font = `400 ${fontSize}px 'VT323', monospace`;
+        const width = game.ctx.measureText(text).width;
+        const x = shieldX(state.you) + width / 2 + 10;
+        const y = clampY(80 + Math.random() * (game.h - 240));
+        const dist = Math.abs(shieldX(state.cpu) - x);
+        // Progressive WPM: your combo makes launched words fly faster —
+        // up to ~30% at 20+ combo. Defend well to attack harder.
+        const comboBoost = 1 - Math.min(state.you.combo, 20) * 0.015;
+        const dur = tier.travelMs * w_type_dur_mul(type) * comboBoost;
+        const w = {
+            owner: 'cpu', type, text, typed: 0,
+            x, y, vx: dist / dur, size: fontSize, width,
+            hue: 200 + Math.random() * 160,
+            wiggle: Math.random() * Math.PI * 2,
+            spawnAt: performance.now(),
+            bot: null,
+            launched: true,   // player-launched (drawn with a cyan trail tint)
+        };
+        planBotCompletion(w, tier);
+        state.words.push(w);
+
+        // Launching counts as typing for combo purposes.
+        state.you.wordsTyped++;
+        state.you.combo++;
+        if (state.you.combo > state.you.combo_best) state.you.combo_best = state.you.combo;
+        state.you.multiplier = 1 + Math.min(state.you.combo, 50) * 0.1;
+        state.you.comboTimer = 3200;
+        AudioManager.playSFX('destroy', () => {}, { volume: 0.7 });
+        explodeAtVs(x, y, type === 'bomb' ? 'redmagenta' : 'cyan', 14);
     }
 
     function start(tier) {
@@ -4784,7 +4907,7 @@ const Versus = (() => {
         // gets the longest wind-up.
         const tierCfg = TIERS[state.tier];
         state.spawnYou = tierCfg.playerSpawnMs * 0.45;
-        state.spawnCpu = tierCfg.botSpawnMs * 0.65;
+        fillRack(tierCfg);   // Phase 2: your offense is the rack, not auto-spawn
         state.elapsed = 0;
         state.startedAt = performance.now();
         state.winner = null;
@@ -4825,19 +4948,26 @@ const Versus = (() => {
         }
 
         state.spawnYou -= dt;
-        state.spawnCpu -= dt;
-        // Concurrency caps: keep ROOKIE to one word at a time so it feels
-        // genuinely teaching-pace. Cap reached → cooldown stays at 0 and
-        // next frame retries — spawn fires the moment a word is destroyed.
+        // Concurrency cap: keep ROOKIE to one incoming word at a time so it
+        // feels genuinely teaching-pace. Cap reached → cooldown stays at 0
+        // and next frame retries — spawn fires the moment a word dies.
         const youOnScreen = state.words.reduce((n, w) => n + (w.owner === 'you' && !w._dead ? 1 : 0), 0);
-        const cpuOnScreen = state.words.reduce((n, w) => n + (w.owner === 'cpu' && !w._dead ? 1 : 0), 0);
         if (state.spawnYou <= 0 && youOnScreen < tier.maxYouOnScreen) {
             spawnWord('you', tier);
             state.spawnYou = tier.playerSpawnMs * (0.85 + Math.random() * 0.3);
         }
-        if (state.spawnCpu <= 0 && cpuOnScreen < tier.maxCpuOnScreen) {
-            spawnWord('cpu', tier);
-            state.spawnCpu = tier.botSpawnMs * (0.85 + Math.random() * 0.3);
+        // Phase 2: words flying at the bot come ONLY from your rack launches.
+        // Refill empty rack slots one at a time after a short cooldown.
+        if (state.you.rack.length < tier.rackSize) {
+            state.you.rackRefillT -= dt;
+            if (state.you.rackRefillT <= 0) {
+                state.you.rack.push({
+                    text: pickRackText(tier),
+                    typed: 0,
+                    isBomb: Math.random() < tier.rackBombRate,
+                });
+                state.you.rackRefillT = tier.rackRefillMs;
+            }
         }
 
         for (const side of [state.you, state.cpu]) {
@@ -4917,6 +5047,7 @@ const Versus = (() => {
             defender.lives--;
             defender.heartFx.push({ idx: defender.lives, life: 500 }); // Versus uses longer heart anim
         }
+        if (defender.which === 'cpu') state.you.attacksLanded += damage;
         defender.combo = 0; defender.multiplier = 1; defender.comboTimer = 0;
         state.shake = Math.max(state.shake, defender.which === 'you' ? 16 : 12);
         state.flash = Math.max(state.flash, 0.4);
@@ -4938,20 +5069,61 @@ const Versus = (() => {
         }
         if (e.key === 'Backspace') {
             if (state.you.target) { state.you.target = null; state.you.input = ''; }
+            else if (state.you.rackTarget != null) {
+                const slot = state.you.rack[state.you.rackTarget];
+                if (slot) slot.typed = 0;
+                state.you.rackTarget = null;
+                state.you.input = '';
+            }
             return true;
         }
         if (e.key.length !== 1 || !/[a-zA-Z]/.test(e.key)) return false;
         const ch = e.key.toLowerCase();
-        const candidates = state.words.filter(w => w.owner === 'you' && !w._dead);
-        if (!state.you.target) {
-            let best = null, bestDecoy = null;
-            for (const w of candidates) {
-                if (w.text[0] !== ch) continue;
-                if (w.type === 'decoy') { if (!bestDecoy || bestDecoy.x > w.x) bestDecoy = w; }
-                else { if (!best || best.x > w.x) best = w; }
+        const tier = TIERS[state.tier];
+
+        // Continue an in-progress incoming (defense) target.
+        if (state.you.target) {
+            const expected = state.you.target.text[state.you.target.typed];
+            if (ch === expected) {
+                state.you.target.typed++;
+                state.you.input = state.you.target.text.slice(0, state.you.target.typed);
+                state.you.charsTyped++;
+                AudioManager.playSFX('type', () => {}, { volume: 0.3, playbackRate: 0.92 + Math.random() * 0.16 });
+                if (state.you.target.typed === state.you.target.text.length) playerComplete(state.you.target);
+            } else {
+                if (state.you.combo > 2) state.you.combo = Math.max(0, state.you.combo - 1);
             }
-            if (!best) best = bestDecoy;
-            if (!best) return true;
+            return true;
+        }
+
+        // Continue an in-progress rack (attack) target.
+        if (state.you.rackTarget != null) {
+            const slot = state.you.rack[state.you.rackTarget];
+            if (!slot) { state.you.rackTarget = null; state.you.input = ''; return true; }
+            const expected = slot.text[slot.typed];
+            if (ch === expected) {
+                slot.typed++;
+                state.you.input = slot.text.slice(0, slot.typed);
+                state.you.charsTyped++;
+                AudioManager.playSFX('type', () => {}, { volume: 0.3, playbackRate: 0.92 + Math.random() * 0.16 });
+                if (slot.typed === slot.text.length) launchAttack(state.you.rackTarget, tier);
+            } else {
+                if (state.you.combo > 2) state.you.combo = Math.max(0, state.you.combo - 1);
+            }
+            return true;
+        }
+
+        // No target yet: DEFENSE FIRST — incoming words always outrank the
+        // rack for a contested first letter (survival beats offense).
+        const candidates = state.words.filter(w => w.owner === 'you' && !w._dead);
+        let best = null, bestDecoy = null;
+        for (const w of candidates) {
+            if (w.text[0] !== ch) continue;
+            if (w.type === 'decoy') { if (!bestDecoy || bestDecoy.x > w.x) bestDecoy = w; }
+            else { if (!best || best.x > w.x) best = w; }
+        }
+        if (!best) best = bestDecoy;
+        if (best) {
             state.you.target = best;
             best.typed = 1;
             state.you.input = ch;
@@ -4961,15 +5133,20 @@ const Versus = (() => {
             if (best.typed === best.text.length) playerComplete(best);
             return true;
         }
-        const expected = state.you.target.text[state.you.target.typed];
-        if (ch === expected) {
-            state.you.target.typed++;
-            state.you.input = state.you.target.text.slice(0, state.you.target.typed);
-            state.you.charsTyped++;
-            AudioManager.playSFX('type', () => {}, { volume: 0.3, playbackRate: 0.92 + Math.random() * 0.16 });
-            if (state.you.target.typed === state.you.target.text.length) playerComplete(state.you.target);
-        } else {
-            if (state.you.combo > 2) state.you.combo = Math.max(0, state.you.combo - 1);
+
+        // Otherwise try the rack — only when there's launch capacity.
+        if (attacksInFlight() < tier.maxCpuOnScreen) {
+            const idx = state.you.rack.findIndex(r => r.text[0] === ch);
+            if (idx !== -1) {
+                const slot = state.you.rack[idx];
+                state.you.rackTarget = idx;
+                slot.typed = 1;
+                state.you.input = ch;
+                state.you.charsTyped++;
+                AudioManager.playSFX('lock', () => {}, { volume: 0.6 });
+                AudioManager.playSFX('type', () => {}, { volume: 0.3, playbackRate: 0.92 + Math.random() * 0.16 });
+                if (slot.typed === slot.text.length) launchAttack(idx, tier);
+            }
         }
         return true;
     }
@@ -5028,7 +5205,9 @@ const Versus = (() => {
         const yourWpm = mins > 0 ? Math.round((state.you.charsTyped / 5) / mins) : 0;
         const botWpm  = mins > 0 ? Math.round((state.cpu.charsTyped / 5) / mins) : 0;
         const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
-        set('vs-result-eyebrow', winYou ? 'YOU WIN' : 'YOU LOSE');
+        const hits = state.you.attacksLanded;
+        set('vs-result-eyebrow', (winYou ? 'YOU WIN' : 'YOU LOSE')
+            + (hits > 0 ? ` · ${hits} HIT${hits === 1 ? '' : 'S'} LANDED` : ''));
         set('vs-result-title', winYou ? 'VICTORY' : 'DEFEATED');
         set('vs-result-tier', tier.label);
         set('vs-result-wpm', String(yourWpm));
@@ -5147,14 +5326,16 @@ const Versus = (() => {
             return;
         }
 
+        // Words flying at the bot are now YOUR launched attacks — draw them
+        // in your cyan so ownership reads at a glance. Incoming stays white.
         const fillCol = w.type === 'bomb' ? '#FF1744'
             : w.type === 'bonus' ? '#FFD93D'
             : w.type === 'twin' ? '#00FF9F'
-            : (w.owner === 'cpu' ? '#FF2E97' : '#F0F4FF');
+            : (w.owner === 'cpu' ? '#00F0FF' : '#F0F4FF');
         const glowCol = w.type === 'bomb' ? '#FF1744'
             : w.type === 'bonus' ? '#FFD93D'
             : w.type === 'twin' ? '#00FF9F'
-            : (w.owner === 'cpu' ? '#FF2E97' : '#00F0FF');
+            : '#00F0FF';
 
         if (isTargeted && w.typed > 0) {
             const totalW = w.width;
@@ -5210,14 +5391,19 @@ const Versus = (() => {
         ctx.fillText('VERSUS', w / 2, 26);
         ctx.shadowBlur = 0;
 
-        if (state.you.target) {
+        if (state.you.target || state.you.rackTarget != null) {
             ctx.font = '400 22px VT323, monospace';
-            ctx.fillStyle = '#FFD93D';
-            ctx.shadowColor = '#FFD93D'; ctx.shadowBlur = 8;
+            // Defense input in gold; attack input in cyan so the player
+            // always knows which mode their keystrokes are in.
+            const col = state.you.target ? '#FFD93D' : '#00F0FF';
+            ctx.fillStyle = col;
+            ctx.shadowColor = col; ctx.shadowBlur = 8;
             ctx.textAlign = 'center';
             ctx.fillText(state.you.input + '_', w / 4, game.h - 28);
             ctx.shadowBlur = 0;
         }
+
+        drawRack(ctx);
 
         const pu = state.you.powerups;
         ctx.font = '400 14px VT323, monospace';
@@ -5231,6 +5417,63 @@ const Versus = (() => {
         };
         drawPu('⇧F FREEZE', pu.freeze, pu.freeze > 0);
         drawPu('⇧S SHIELD', pu.shield, pu.shield > 0);
+    }
+
+    // Attack rack — capsules along the bottom of your half. Typing one of
+    // these (when no incoming word matches) launches it at the bot.
+    function drawRack(ctx) {
+        const rack = state.you.rack;
+        const tier = TIERS[state.tier];
+        const capped = attacksInFlight() >= tier.maxCpuOnScreen;
+        const y = game.h - 64;
+        let x = 22;
+
+        ctx.font = '400 11px Inter, sans-serif';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = capped ? '#6B7299' : '#FF2E97';
+        ctx.fillText(capped ? 'ATTACK RACK · IN FLIGHT, WAIT' : 'ATTACK RACK · TYPE TO LAUNCH', x, y - 26);
+
+        ctx.font = '400 19px VT323, monospace';
+        for (let i = 0; i < rack.length; i++) {
+            const slot = rack[i];
+            const isTgt = state.you.rackTarget === i;
+            const tw = ctx.measureText(slot.text).width;
+            const padX = 10, capW = tw + padX * 2, capH = 28;
+
+            ctx.globalAlpha = capped && !isTgt ? 0.35 : 1;
+            // Capsule
+            ctx.fillStyle = isTgt ? 'rgba(0, 240, 255, 0.16)' : 'rgba(10, 14, 26, 0.8)';
+            ctx.strokeStyle = slot.isBomb ? '#FF1744' : (isTgt ? '#00F0FF' : 'rgba(0, 240, 255, 0.35)');
+            ctx.lineWidth = isTgt ? 2 : 1;
+            if (typeof roundRect === 'function') {
+                roundRect(ctx, x, y - capH + 8, capW, capH, 8);
+                ctx.fill(); ctx.stroke();
+            } else {
+                ctx.fillRect(x, y - capH + 8, capW, capH);
+                ctx.strokeRect(x, y - capH + 8, capW, capH);
+            }
+            // Word: typed prefix gold, rest in type colour
+            const baseCol = slot.isBomb ? '#FF1744' : '#F0F4FF';
+            if (slot.typed > 0) {
+                const typed = slot.text.slice(0, slot.typed);
+                const rest  = slot.text.slice(slot.typed);
+                const typedW = ctx.measureText(typed).width;
+                ctx.fillStyle = '#FFD93D';
+                ctx.fillText(typed, x + padX, y);
+                ctx.fillStyle = baseCol;
+                ctx.fillText(rest, x + padX + typedW, y);
+            } else {
+                ctx.fillStyle = baseCol;
+                ctx.fillText(slot.text, x + padX, y);
+            }
+            ctx.globalAlpha = 1;
+            x += capW + 8;
+        }
+        // Refill pending indicator
+        if (rack.length < tier.rackSize) {
+            ctx.fillStyle = 'rgba(240, 244, 255, 0.25)';
+            ctx.fillText('···', x + 4, y);
+        }
     }
 
     function drawHearts(ctx, side, anchorX, y) {
