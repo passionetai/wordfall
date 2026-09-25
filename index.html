@@ -21,11 +21,19 @@
     <!-- HUD now drawn on canvas (Step 2). Hidden DOM stubs kept for any legacy refs. -->
     <div id="input-buffer"></div>
 
-    <div id="pause-hint">PAUSED</div>
+    <div id="pause-hint">
+        <div class="pause-panel">
+            <div class="pause-title">PAUSED</div>
+            <button class="btn" id="pause-resume">Resume</button>
+            <button class="btn ghost" id="pause-restart">Restart Run</button>
+            <button class="btn ghost" id="pause-quit">Main Menu</button>
+            <div class="pause-hint-line">ESC also resumes</div>
+        </div>
+    </div>
     <div id="toast"></div>
     <div id="boot-progress"><div class="fill"></div></div>
 
-    <div class="overlay show" id="menu">
+    <div class="overlay" id="menu">
         <div id="ambient-letters" aria-hidden="true"></div>
 
         <header class="menu-nav">
@@ -90,6 +98,9 @@
                 <span class="label">PLAY</span>
                 <span class="sub">Build combos · earn power-ups</span>
             </button>
+            <div class="kbd-hint" aria-hidden="true">
+                <kbd>&larr;</kbd><kbd>&rarr;</kbd> choose mode &nbsp;·&nbsp; <kbd>Enter</kbd> play
+            </div>
 
             <section class="quick-guide" aria-label="Quick guide">
                 <h3>Quick Guide</h3>
@@ -128,24 +139,36 @@
     </div>
 
     <div class="overlay" id="gameover">
-        <div class="panel">
-            <h2 id="go-title">GAME OVER</h2>
-            <p id="go-sub">You let one slip through.</p>
+        <div class="panel go-panel">
+            <div class="go-head">
+                <div class="go-grade" id="go-grade" aria-label="Run grade">A</div>
+                <div class="go-headtext">
+                    <h2 id="go-title">GAME OVER</h2>
+                    <p id="go-sub">You let one slip through.</p>
+                </div>
+            </div>
             <div class="stats">
                 <div class="stat"><div class="k">Score</div><div class="v" id="go-score">0</div></div>
                 <div class="stat"><div class="k">WPM</div><div class="v" id="go-wpm">0</div></div>
                 <div class="stat"><div class="k">Best Combo</div><div class="v" id="go-combo">0</div></div>
             </div>
+            <div class="go-pills">
+                <span class="go-pill"><b id="go-acc">100%</b> accuracy</span>
+                <span class="go-pill"><b id="go-words">0</b> words</span>
+                <span class="go-pill">level <b id="go-level">1</b></span>
+                <span class="go-pill"><b id="go-time">0:00</b> survived</span>
+            </div>
             <div id="go-new" style="display:none; color: var(--good); margin-bottom: 12px; font-weight: 600; letter-spacing: 2px;">&#9733; NEW HIGH SCORE &#9733;</div>
+            <!-- Primary actions first so they're never below the fold. -->
+            <div class="btn-row">
+                <button class="btn" id="again-btn">Play Again</button>
+                <button class="btn ghost" id="menu-btn">Main Menu</button>
+            </div>
             <img id="share-preview" alt="Share card preview" />
             <div class="share-row">
                 <button class="btn share-btn" id="share-btn">Share</button>
                 <button class="btn ghost small" id="copy-btn">Copy Score</button>
                 <button class="link-btn" id="download-btn">Download PNG</button>
-            </div>
-            <div class="btn-row">
-                <button class="btn" id="again-btn">Play Again</button>
-                <button class="btn ghost" id="menu-btn">Main Menu</button>
             </div>
         </div>
     </div>
@@ -346,7 +369,23 @@
         // This block is intentionally independent of game.js: if a deploy
         // ever ships a broken game script again, the update toast still
         // works and offers the player the fixed build.
+        // Splash-failure fallback: game.js reveals the menu after its splash.
+        // If the game script ever fails to evaluate (it happened once), force
+        // the menu visible so the page is never a dead black screen.
+        setTimeout(function () {
+            if (!document.body.dataset.wfReady) {
+                var m = document.getElementById('menu');
+                if (m) m.classList.add('show');
+            }
+        }, 6000);
+
         if ('serviceWorker' in navigator) {
+            // Captured BEFORE registering: on a first-ever visit there is no
+            // controller, and the new worker's clients.claim() will set one
+            // during activation — so checking controller later can't tell an
+            // update from a first install (that bug showed the toast to every
+            // new player). Only a page that was already controlled can update.
+            const hadController = !!navigator.serviceWorker.controller;
             const showUpdateToast = () => {
                 if (document.getElementById('update-toast')) return;
                 const t = document.createElement('div');
@@ -358,18 +397,15 @@
                 requestAnimationFrame(() => t.classList.add('show'));
             };
             navigator.serviceWorker.register('./sw.js').then((reg) => {
+                if (!hadController) return; // first install — nothing to update
                 // A worker already waiting means an update arrived while
                 // no page was open to see the statechange.
-                if (reg.waiting && navigator.serviceWorker.controller) showUpdateToast();
+                if (reg.waiting) showUpdateToast();
                 reg.addEventListener('updatefound', () => {
                     const nw = reg.installing;
                     if (!nw) return;
                     nw.addEventListener('statechange', () => {
-                        // 'activated' + an existing controller = an UPDATE
-                        // (first-ever install has no controller — no toast).
-                        if (nw.state === 'activated' && navigator.serviceWorker.controller) {
-                            showUpdateToast();
-                        }
+                        if (nw.state === 'activated') showUpdateToast();
                     });
                 });
             }).catch(() => {});
