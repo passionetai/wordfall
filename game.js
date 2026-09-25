@@ -14,6 +14,10 @@ window.addEventListener('unhandledrejection', (e) => {
     console.error('Word Fall unhandled rejection:', e.reason);
 });
 
+// Signal to index.html's dead-page fallback that the game script evaluated —
+// the inline script force-shows the menu after 6s only when this is absent.
+try { document.body.dataset.wfReady = '1'; } catch (e) {}
+
 // ---------- localStorage key constants ----------
 // Declared FIRST: the DeepSeek module below reads LS_DEEPSEEK_KEY at
 // module-eval time, so these must precede every IIFE in this file
@@ -49,15 +53,22 @@ const PARTICLE_GRAVITY      = 0.0002; // per-ms² downward acceleration for part
 // ╚══════════════════════════════════════════════════════════════╝
 
 // ---------- Word lists ----------
+// Substantially expanded (2-3x per tier) so long runs don't feel repetitive.
+// Kept strictly disjoint from BOSS_WORDS — verified by tools/check-words.mjs.
 const WORDS = {
-    tier1: ('the and you for are but not all can had has was one our out his her she him who why how new old now use way day man men two big bad red sun sky run cat dog fly jam ice tea pen ink art mix box top map key bus car egg cup bag fox owl bee ant cow pig').split(' '),
-    tier2: ('time year work life hand part case week point fact game node hero star moon wave fire rain snow leaf rose lake river beach plant cloud light dream brave quick smart proud noisy quiet sharp brick stone metal glass pearl crown sword frost storm flame ember').split(' '),
-    tier3: ('window forest planet rocket dragon castle silver galaxy thunder breeze stream meadow valley summit ridge crystal harbor temple wonder garden orchid wizard pirate phantom blossom whisper ranger archer falcon comet aurora cosmos legend').split(' '),
-    tier4: ('mountain elephant dinosaur sunshine universe rainbow penguin octopus monarch volcano harvest mystery library journey horizon adventure paradise melody victory infinite gravity magnetic absolute hurricane wilderness lighthouse').split(' '),
+    tier1: ('the and you for are but not all can had has was one our out his her she him who why how new old now use way day man men two big bad red sun sky run cat dog fly jam ice tea pen ink art mix box top map key bus car egg cup bag fox owl bee ant cow pig ' +
+            'sea air oak gem orb axe bow arc hat cap arm leg paw hen ram elk fig nut ash den web fog dew mud sap tin zip hum gap rug mat lid jar pot pan fern moss tide foam gale hail bolt rune myth saga epic echo glow haze opal onyx jade ruby lamp desk door ring song wind wolf bear hawk crab frog moth wasp dust sand rock wood coal kite dice card coin bell drum horn pipe boot sock vest belt mask cape').split(' '),
+    tier2: ('time year work life hand part case week point fact game node hero star moon wave fire rain snow leaf rose lake river beach plant cloud light dream brave quick smart proud noisy quiet sharp brick stone metal glass pearl crown sword frost storm flame ember ' +
+            'amber blaze charm cliff coral daisy eagle fable globe honey ivory jewel lemon maple night ocean piano raven spice tiger tulip vapor mist dusk dawn peak cave reef isle grove flare petal thorn knight shadow quartz willow zephyr candle bridge canyon spirit meteor nectar violet marble copper bronze timber saddle shield dagger goblet').split(' '),
+    tier3: ('window forest planet rocket dragon castle silver galaxy thunder breeze stream meadow valley summit ridge crystal harbor temple wonder garden orchid wizard pirate phantom blossom whisper ranger archer falcon comet aurora cosmos legend ' +
+            'lagoon zenith nebula prairie glacier monsoon typhoon cascade caravan compass dungeon fortune gazelle harmony javelin kingdom lantern mirage pegasus quiver saffron trident unicorn voyager warrior citadel vortex sphinx grotto tundra savanna bazaar beacon cipher griffin phoenix serpent panther leopard cheetah dolphin narwhal').split(' '),
+    tier4: ('mountain elephant dinosaur sunshine universe rainbow penguin octopus monarch volcano harvest mystery library journey horizon adventure paradise melody victory infinite gravity magnetic absolute hurricane wilderness lighthouse ' +
+            'avalanche butterfly cathedral chronicle crocodile detective discovery labyrinth landscape medieval midnight moonlight nightmare obsidian porcelain sapphire scorpion stampede starlight symphony telescope treasure twilight vagabond waterfall whirlwind champion colossus daydream emerald festival fireworks guardian').split(' '),
     // Note: tier5 is regular-game vocabulary only — boss-reserved words
     // (kaleidoscope, thunderstorm, constellation, etc.) live exclusively in
     // BOSS_WORDS so they can't appear as regular falling words.
-    tier5: ('astronaut revolutionary labyrinthine extraordinary independence bewildering philosophical antagonist illuminate accelerate distinguish fascinating championship controversial contemporary perspective artificial appropriate').split(' '),
+    tier5: ('astronaut revolutionary labyrinthine extraordinary independence bewildering philosophical antagonist illuminate accelerate distinguish fascinating championship controversial contemporary perspective artificial appropriate ' +
+            'achievement atmosphere breathtaking celebration civilization combination competition consequence conversation curiosity declaration destination electricity environment exaggerate exploration expedition generation hibernation imagination inspiration intelligent legislation measurement opportunity possibility professional spectacular temperature understand volunteer wonderful').split(' '),
 };
 
 function poolForLevel(level) {
@@ -80,6 +91,11 @@ const BOSS_WORDS = [
     'devastation','magnificent','microscopic','transcendent','phenomenal',
     'revolution','domination','deliverance','masterpiece','turbulence',
     'mischievous','paranormal','motivation','innovation',
+    // Expanded boss vocabulary — still exclusive to bosses.
+    'extermination','conflagration','impenetrable','insurmountable','instantaneous',
+    'misconception','extravaganza','apocalyptic','cataclysmic','malfunction',
+    'overwhelming','polarization','proliferation','totalitarian','unbreakable',
+    'unstoppable','vaporization','annihilator','disintegrate','thermonuclear',
 ];
 
 // ╔══════════════════════════════════════════════════════════════╗
@@ -838,6 +854,7 @@ const game = {
     bullets: [],
     particles: [],
     floaters: [],
+    rings: [],          // shockwave rings on word destroy
     target: null,
     input: '',
     score: 0, level: 1, lives: 5,
@@ -847,7 +864,7 @@ const game = {
     freezeTimer: 0, shieldTimer: 0,
     powerups: { freeze: 0, bomb: 0, shield: 0 },
     shake: 0, flash: 0, flashColor: '#ffffff',
-    wordsCompleted: 0, charsTyped: 0,
+    wordsCompleted: 0, charsTyped: 0, keyErrors: 0,
     startTime: 0, elapsed: 0, sprintTimeLeft: 90000,
     last: 0,
     bgStars: [],
@@ -894,6 +911,9 @@ function saveHigh() {
 
 // ---------- Setup ----------
 function init() {
+    // Opt-in debug handle for automated browser tests (tools/e2e.cjs).
+    // Only present when the page is opened with ?debug in the URL.
+    try { if (/[?&]debug\b/.test(location.search)) window.__wf = game; } catch (e) {}
     game.canvas = document.getElementById('game');
     game.ctx = game.canvas.getContext('2d');
     game.high = loadHigh();
@@ -915,12 +935,9 @@ function init() {
     game.canvas.addEventListener('click', onCanvasClick);
 
     document.querySelectorAll('#mode-select .mode').forEach(el => {
-        el.addEventListener('click', () => {
-            document.querySelectorAll('#mode-select .mode').forEach(m => m.classList.remove('selected'));
-            el.classList.add('selected');
-            game.mode = el.dataset.mode;
-        });
+        el.addEventListener('click', () => selectMode(el.dataset.mode));
     });
+    selectMode(game.mode);   // paint the initial PLAY subtitle
     document.getElementById('play-btn').addEventListener('click', onPlayClicked);
     document.getElementById('again-btn').addEventListener('click', startGame);
     document.getElementById('menu-btn').addEventListener('click', toMenu);
@@ -943,9 +960,15 @@ function init() {
     // Wrap preloadAssets to track image progress
     preloadAssetsWithProgress(() => { imgDone++; updateBoot(); }, () => {
         applyLogoAssets();
-        // Once images are done we can show the menu; audio finishes in background.
-        game.state = 'menu';
-        if (typeof AmbientLetters !== 'undefined') AmbientLetters.start();
+        // Hold the branded splash for a minimum beat even on a warm cache,
+        // so the wordmark animation gets to land before the menu reveals.
+        const MIN_SPLASH_MS = 1700;
+        const wait = Math.max(0, MIN_SPLASH_MS - (game.loadT || 0));
+        setTimeout(() => {
+            game.state = 'menu';
+            show('menu');    // menu starts hidden now — splash owns first paint
+            if (typeof AmbientLetters !== 'undefined') AmbientLetters.start();
+        }, wait);
     });
 
     // Kick off audio preload in parallel
@@ -1082,7 +1105,7 @@ function startGame() {
     game.state = 'playing';
     if (typeof AmbientLetters !== 'undefined') AmbientLetters.stop();
     AudioManager.setActiveMusic('game');
-    game.words = []; game.bullets = []; game.particles = []; game.floaters = [];
+    game.words = []; game.bullets = []; game.particles = []; game.floaters = []; game.rings = [];
     game.target = null; game.input = '';
     game.score = 0; game.level = 1;
     game.combo = 0; game.bestCombo = 0;
@@ -1090,7 +1113,7 @@ function startGame() {
     game.spawnCooldown = 600;
     game.freezeTimer = 0; game.shieldTimer = 0;
     game.shake = 0; game.flash = 0;
-    game.wordsCompleted = 0; game.charsTyped = 0;
+    game.wordsCompleted = 0; game.charsTyped = 0; game.keyErrors = 0;
     game.startTime = performance.now();
     game.elapsed = 0; game.sprintTimeLeft = 90000;
     game.heartFx = [];
@@ -1133,6 +1156,7 @@ function toMenu() {
     show('menu'); hide('gameover');
     refreshHighUI();
     if (typeof refreshDailyCard === 'function') refreshDailyCard();
+    selectMode(game.mode);   // refresh PLAY subtitle with any new best
 }
 
 function gameOver(reason) {
@@ -1197,10 +1221,28 @@ function gameOver(reason) {
         : (reason === 'DETONATED' ? 'A bomb word slipped past you.' :
            reason === "DAILY COMPLETE" ? 'You finished today’s puzzle.' :
            'Words crashed through your defense.');
-    document.getElementById('go-score').textContent = game.score;
+    // Score counts up when the panel reveals (the reveal is delayed ~1.1s).
+    countUp(document.getElementById('go-score'), game.score, 1100);
     document.getElementById('go-wpm').textContent = wpm;
     document.getElementById('go-combo').textContent = game.bestCombo;
     document.getElementById('go-new').style.display = isNew ? '' : 'none';
+
+    // Accuracy + extra run stats + letter grade.
+    const acc = runAccuracy();
+    const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    setTxt('go-acc', acc + '%');
+    setTxt('go-words', game.wordsCompleted);
+    setTxt('go-level', game.level);
+    const secs = Math.floor(game.elapsed / 1000);
+    setTxt('go-time', `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`);
+    const grade = runGrade(acc, wpm, game.wordsCompleted);
+    const gradeEl = document.getElementById('go-grade');
+    if (gradeEl) {
+        gradeEl.textContent = grade;
+        gradeEl.className = 'go-grade g-' + grade;
+        // restart the stamp animation on every game over
+        gradeEl.style.animation = 'none'; void gradeEl.offsetWidth; gradeEl.style.animation = '';
+    }
 
     // Prepare the share card using current run stats.
     const cardStats = {
@@ -1605,6 +1647,7 @@ function updateActBreak(dt) {
     game.bullets = game.bullets.filter(b => b.life < b.max);
     updateParticles(dt);
     updateFloaters(dt);
+    updateRings(dt);
     decayVisualState(dt);
     game.actBreakT -= dt;
     const cd = Math.ceil(Math.max(0, game.actBreakT) / 1000);
@@ -1634,6 +1677,26 @@ function bossEscaped(boss) {
 }
 
 // ---------- Input ----------
+// Shared pause/resume — used by the Esc key, the touch pause button, and
+// the pause-menu buttons so all paths behave identically.
+function pauseGame() {
+    if (game.state !== 'playing') return;
+    game.state = 'paused';
+    // Daily is one attempt per UTC day — restarting mid-run would let
+    // players re-roll the (seeded, identical) puzzle, so hide it there.
+    const restart = document.getElementById('pause-restart');
+    if (restart) restart.style.display = game.isDaily ? 'none' : '';
+    document.getElementById('pause-hint').classList.add('show');
+    AudioManager.pauseMusic();
+}
+function resumeGame() {
+    if (game.state !== 'paused') return;
+    game.state = 'playing';
+    document.getElementById('pause-hint').classList.remove('show');
+    if (Settings.values.musicOn) AudioManager.resumeMusic();
+    game.last = performance.now();
+}
+
 function onKey(e) {
     // Act-break ready screen: Enter / Space / Escape all jump into the next act.
     if (game.state === 'actbreak') {
@@ -1658,22 +1721,27 @@ function onKey(e) {
             || tryClose('stats-modal') || tryClose('settings-modal')) {
             return;
         }
-        if (game.state === 'playing') {
-            game.state = 'paused';
-            document.getElementById('pause-hint').classList.add('show');
-            AudioManager.pauseMusic();
-        }
-        else if (game.state === 'paused') {
-            game.state = 'playing';
-            document.getElementById('pause-hint').classList.remove('show');
-            if (Settings.values.musicOn) AudioManager.resumeMusic();
-            game.last = performance.now();
-        }
+        if (game.state === 'playing') pauseGame();
+        else if (game.state === 'paused') resumeGame();
         return;
     }
     if (game.state !== 'playing') {
-        if (e.key === 'Enter' || e.key === ' ') {
-            if (game.state === 'menu' || game.state === 'gameover') startGame();
+        // Ignore menu hotkeys while any modal/overlay sits on top of the
+        // menu (settings, stats, tier picker, tutorial, etc.).
+        const modalOpen = document.querySelector(
+            '#settings-modal.show, #stats-modal.show, #daily-played.show, ' +
+            '#confirm-reset.show, #versus-setup.show, #tutorial.show');
+        if (game.state === 'menu' && !modalOpen) {
+            if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { cycleMode(1); e.preventDefault(); return; }
+            if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   { cycleMode(-1); e.preventDefault(); return; }
+            if (e.key === 'Enter' || e.key === ' ') {
+                // Route through the Play button path so tutorial gating and
+                // the Versus tier picker apply (startGame() skipped both).
+                e.preventDefault();
+                onPlayClicked();
+            }
+        } else if (game.state === 'gameover' && !modalOpen) {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); startGame(); }
         }
         return;
     }
@@ -1735,6 +1803,9 @@ function onKey(e) {
             }
             if (best.typed === best.text.length) completeWord(best);
         } else {
+            // Whiff — a letter that matches nothing on screen counts as an
+            // accuracy error (it's the most common typo in this genre).
+            game.keyErrors++;
             if (game.combo > 0) game.comboTimer = Math.max(0, game.comboTimer - 800);
         }
         return;
@@ -1768,6 +1839,7 @@ function onKey(e) {
         renderInput();
         if (game.target.typed === game.target.text.length) completeWord(game.target);
     } else {
+        game.keyErrors++;
         if (game.combo > 2) game.combo = Math.max(0, game.combo - 1);
         game.shake = Math.max(game.shake, 4);
     }
@@ -1847,6 +1919,10 @@ function completeWord(w) {
     game.multiplier = 1 + Math.min(game.combo, 50) * 0.1;
     game.comboTimer = COMBO_TIMEOUT_MS;
     game.fireT = 100;
+
+    // Shockwave ring in the word's type colour (bosses get a big one).
+    const ringCol = ({ bomb: '#FF1744', bonus: '#FFD93D', twin: '#00FF9F', boss: '#FF2E97' })[w.type] || '#00F0FF';
+    spawnRing(w.x, w.y, ringCol, w.type === 'boss' ? 220 : 60 + Math.min(40, game.combo * 2));
 
     // Per-run trackers (Step 4)
     if (w.type === 'bomb') game.bombsTypedThisRun++;
@@ -1929,7 +2005,22 @@ function completeWord(w) {
     levelUpCheck();
 }
 
+// Combo announcer tiers — big centre-screen callouts as a streak grows.
+const COMBO_CALLOUTS = [
+    [5, 'NICE', '#00F0FF'], [10, 'GREAT', '#00FF9F'], [15, 'AMAZING', '#FFD93D'],
+    [20, 'INCREDIBLE', '#FF8A00'], [30, 'UNSTOPPABLE', '#FF2E97'], [50, 'LEGENDARY', '#FF1744'],
+];
+
 function comboMilestoneCheck() {
+    const callout = COMBO_CALLOUTS.find(([n]) => n === game.combo);
+    if (callout) {
+        const [n, text, color] = callout;
+        game.floaters.push({
+            text: `${text}!`, x: game.w / 2, y: game.h * 0.34, vy: -0.025,
+            life: 1100, max: 1100, color, size: Math.min(60, 38 + n * 0.5),
+            announce: true,
+        });
+    }
     if (game.combo > 0 && game.combo % 10 === 0) {
         const kinds = ['freeze', 'bomb', 'shield'];
         const kind = kinds[(game.combo / 10 - 1) % kinds.length];
@@ -2191,6 +2282,44 @@ function currentWPM() {
     return Math.round((game.charsTyped / 5) / minutes);
 }
 
+// Correct keystrokes / all letter keystrokes (mistypes + whiffs are errors).
+function runAccuracy() {
+    const total = game.charsTyped + (game.keyErrors || 0);
+    return total > 0 ? Math.round((game.charsTyped / total) * 100) : 100;
+}
+
+// Letter grade for the end screen. Accuracy weighs more than raw speed so
+// careful typists are rewarded; very short runs can't grade above D.
+//   96% @ 50 WPM -> A   ·   99% @ 75 -> S   ·   90% @ 35 -> B   ·   80% @ 25 -> C
+function runGrade(acc, wpm, words) {
+    if (words < 3) return 'D';
+    const composite = acc * 0.6 + Math.min(wpm, 100) * 0.4;
+    if (composite >= 88) return 'S';
+    if (composite >= 76) return 'A';
+    if (composite >= 62) return 'B';
+    if (composite >= 48) return 'C';
+    return 'D';
+}
+
+// Animate an element's number from 0 to `target` after `delayMs`
+// (easeOutCubic, ~0.9s). Re-entrant: a newer call cancels an older one.
+function countUp(el, target, delayMs = 0) {
+    if (!el) return;
+    const token = (el._countToken = (el._countToken || 0) + 1);
+    if (reduceMotion() || target <= 0) { el.textContent = target; return; }
+    el.textContent = '0';
+    setTimeout(() => {
+        const dur = 900, t0 = performance.now();
+        const step = (now) => {
+            if (el._countToken !== token) return;
+            const p = Math.min(1, (now - t0) / dur);
+            el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3)));
+            if (p < 1) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+    }, delayMs);
+}
+
 // ---------- Loop ----------
 function loop(now) {
     const dt = Math.min(64, now - (game.last || now));
@@ -2259,6 +2388,7 @@ function update(dt) {
         game.bullets = game.bullets.filter(b => b.life < b.max);
         updateParticles(dt);
         updateFloaters(dt);
+    updateRings(dt);
         decayVisualState(dt);
         return;
     }
@@ -2367,6 +2497,7 @@ function update(dt) {
 
     updateParticles(dt);
     updateFloaters(dt);
+    updateRings(dt);
 
     for (const fx of game.heartFx) fx.life -= dt;
     game.heartFx = game.heartFx.filter(fx => fx.life > 0);
@@ -2429,37 +2560,72 @@ function wordTypeIndicator(type) {
 // ╚══════════════════════════════════════════════════════════════╝
 
 // ---------- Draw ----------
+// Branded splash: the WORDFALL letters drop into place one by one, with a
+// rotating gameplay tip underneath. The DOM boot bar (index.html) shows
+// real asset progress alongside this canvas animation.
+const SPLASH_TIPS = [
+    'Type the first letter of a word to lock on',
+    'Shift+F freezes time · Shift+S shields a miss',
+    'Struck-through ghost words are BAIT — skip them',
+    'Every 10-combo earns a power-up',
+    'Red bomb words end the run if they land',
+    'Gold bonus words grant instant power-ups',
+    'Green twin words are linked — type both fast',
+    'A boss drops every 5 levels. Type it letter by letter',
+    'Backspace drops your lock so you can re-target',
+    'Combos in Versus make your attacks fly faster',
+];
+
 function drawLoadingScreen() {
     const ctx = game.ctx, w = game.w, h = game.h;
-    ctx.fillStyle = '#0A0E1A';
+    // Deep gradient backdrop, matching the menu's radial accents.
+    const grad = ctx.createRadialGradient(w / 2, h * 0.4, 0, w / 2, h * 0.4, Math.max(w, h) * 0.7);
+    grad.addColorStop(0, '#101430');
+    grad.addColorStop(1, '#0A0E1A');
+    ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
 
-    ctx.font = "400 64px 'Monoton', Impact, sans-serif";
+    // Wordmark: letters drop in with a slight overshoot bounce, staggered.
+    const word = 'WORDFALL';
+    const size = Math.min(88, w / 9);
+    ctx.font = `400 ${size}px 'Monoton', Impact, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#00F0FF';
-    ctx.shadowColor = '#00F0FF';
-    ctx.shadowBlur = 24;
-    ctx.fillText('LOADING…', w / 2, h / 2 - 20);
-    ctx.shadowBlur = 0;
-
-    const dots = 5, gap = 18, dotR = 5;
-    const totalW = (dots - 1) * gap;
+    const spacing = size * 0.82;
+    const totalW = spacing * (word.length - 1);
     const baseX = w / 2 - totalW / 2;
-    const baseY = h / 2 + 40;
-    for (let i = 0; i < dots; i++) {
-        const phase = (game.loadT / 200) - i * 0.35;
-        const a = 0.35 + 0.5 * (0.5 + 0.5 * Math.sin(phase));
-        ctx.globalAlpha = a;
-        ctx.fillStyle = '#00F0FF';
-        ctx.shadowColor = '#00F0FF';
-        ctx.shadowBlur = 12;
-        ctx.beginPath();
-        ctx.arc(baseX + i * gap, baseY, dotR, 0, Math.PI * 2);
-        ctx.fill();
+    const baseY = h / 2 - 30;
+    for (let i = 0; i < word.length; i++) {
+        const t0 = 120 + i * 110;                    // per-letter start time
+        const p = Math.min(1, Math.max(0, (game.loadT - t0) / 420));
+        if (p <= 0) continue;
+        // easeOutBack for a small overshoot as each letter lands
+        const c = 1.70158;
+        const e = 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2);
+        const y = baseY - (1 - e) * 140;
+        const isFall = i >= 4;                       // FALL in magenta
+        const col = isFall ? '#FF2E97' : '#00F0FF';
+        ctx.globalAlpha = Math.min(1, p * 1.6);
+        ctx.fillStyle = col;
+        ctx.shadowColor = col;
+        ctx.shadowBlur = 22 * p;
+        ctx.fillText(word[i], baseX + i * spacing, y);
     }
     ctx.globalAlpha = 1;
     ctx.shadowBlur = 0;
+
+    // Rotating tip (switches every 2.6s once the wordmark has landed).
+    if (game.loadT > 1100) {
+        const idx = Math.floor(game.loadT / 2600) % SPLASH_TIPS.length;
+        const cyc = (game.loadT % 2600) / 2600;
+        // fade in/out at the edges of each tip's window
+        const a = Math.min(1, cyc * 6, (1 - cyc) * 6);
+        ctx.globalAlpha = Math.max(0, a) * 0.9;
+        ctx.font = "400 15px Inter, sans-serif";
+        ctx.fillStyle = '#8fa0c8';
+        ctx.fillText('TIP  ·  ' + SPLASH_TIPS[idx], w / 2, h / 2 + 58);
+        ctx.globalAlpha = 1;
+    }
 }
 
 function draw(dt) {
@@ -2477,6 +2643,7 @@ function draw(dt) {
     drawWords(ctx);
     drawBullets(ctx);
     drawParticles(ctx);
+    drawRings(ctx);
     drawFloaters(ctx);
 
     if (game.shieldTimer > 0) drawShieldAura(ctx, w, h);
@@ -2498,6 +2665,7 @@ function draw(dt) {
         ctx.fillRect(0, 0, w, h);
     }
 
+    drawDangerVignette(ctx, w, h);
     drawBottomHud(ctx, w, h);
     drawCannon(ctx, w, h);
     drawTopHud(ctx, w, h);
@@ -2981,15 +3149,77 @@ function drawFloaters(ctx) {
     for (const f of game.floaters) {
         const a = Math.min(1, f.life / 400);
         ctx.globalAlpha = a;
-        ctx.font = `400 ${Math.round(f.size * 1.1)}px 'Monoton', Impact, sans-serif`;
+        // Announcer callouts pop in (1.6x → 1x over their first ~180ms).
+        let scale = 1;
+        if (f.announce) {
+            const age = f.max - f.life;
+            scale = age < 180 ? 1.6 - 0.6 * (age / 180) : 1;
+        }
+        ctx.font = `400 ${Math.round(f.size * 1.1 * scale)}px 'Monoton', Impact, sans-serif`;
         ctx.textAlign = 'center';
         ctx.fillStyle = f.color;
         ctx.shadowColor = f.color;
-        ctx.shadowBlur = 18;
+        ctx.shadowBlur = f.announce ? 30 : 18;
         ctx.fillText(f.text, f.x, f.y);
         ctx.shadowBlur = 0;
     }
     ctx.globalAlpha = 1;
+}
+
+// ---- Shockwave rings (word-destroy punch) ----
+function spawnRing(x, y, color, maxR = 70) {
+    game.rings.push({ x, y, color, r: 6, maxR, life: 380, max: 380 });
+}
+function updateRings(dt) {
+    for (const r of game.rings) {
+        r.life -= dt;
+        const p = 1 - r.life / r.max;
+        r.r = 6 + (r.maxR - 6) * (1 - Math.pow(1 - p, 2)); // easeOutQuad
+    }
+    game.rings = game.rings.filter(r => r.life > 0);
+}
+function drawRings(ctx) {
+    for (const r of game.rings) {
+        const a = Math.max(0, r.life / r.max);
+        ctx.globalAlpha = a * 0.85;
+        ctx.strokeStyle = r.color;
+        ctx.lineWidth = 1 + 3 * a;
+        ctx.shadowColor = r.color;
+        ctx.shadowBlur = 12;
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+}
+
+// ---- Danger vignette: red edge glow as words near the floor, plus a
+// heartbeat pulse on your last life. Pure tension feedback. ----
+function drawDangerVignette(ctx, w, h) {
+    let danger = 0;
+    const floor = floorY();
+    for (const wd of game.words) {
+        if (wd.type === 'decoy') continue;
+        const p = wd.y / floor;
+        if (p > 0.7) danger = Math.max(danger, (p - 0.7) / 0.3);
+    }
+    const lastLife = game.lives === 1 && game.mode !== 'hardcore';
+    if (danger <= 0 && !lastLife) return;
+    const t = performance.now();
+    let a = danger * 0.35;
+    if (lastLife) {
+        // double-thump heartbeat, ~72 bpm: two positive sine lobes in the
+        // first half of each beat period, silence in the second half.
+        const beat = (t % 830) / 830;
+        const thump = beat < 0.5 ? Math.max(0, Math.sin(beat * Math.PI * 8)) : 0;
+        a = Math.max(a, 0.12 + thump * 0.18);
+    }
+    const g = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.max(w, h) * 0.75);
+    g.addColorStop(0, 'rgba(255, 23, 68, 0)');
+    g.addColorStop(1, `rgba(255, 23, 68, ${Math.min(0.5, a)})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
 }
 
 function drawShieldAura(ctx, w, h) {
@@ -4002,16 +4232,8 @@ function wireTouchHandlers() {
         const y = e.clientY - rect.top;
         // Touch pause toggle (works in both playing and paused states)
         if (isTouchActive() && hitTestPauseBtn(x, y)) {
-            if (game.state === 'playing') {
-                game.state = 'paused';
-                document.getElementById('pause-hint').classList.add('show');
-                AudioManager.pauseMusic();
-            } else if (game.state === 'paused') {
-                game.state = 'playing';
-                document.getElementById('pause-hint').classList.remove('show');
-                if (Settings.values.musicOn) AudioManager.resumeMusic();
-                game.last = performance.now();
-            }
+            if (game.state === 'playing') pauseGame();
+            else if (game.state === 'paused') resumeGame();
             e.preventDefault();
             return;
         }
@@ -4372,6 +4594,41 @@ const Tutorial = (() => {
 // ====================================================================
 // Step 5 — Play button gating (tutorial on first launch)
 // ====================================================================
+const MODE_ORDER = ['classic', 'sprint', 'hardcore', 'daily', 'versus'];
+const MODE_BEST_KEY = {
+    classic: 'bestScoreClassic', sprint: 'bestScoreSprint',
+    hardcore: 'bestScoreHardcore', daily: 'bestScoreDaily',
+};
+
+// Single source of truth for menu mode selection (mouse + keyboard).
+// Also refreshes the PLAY button subtitle with the selected mode's best.
+function selectMode(mode) {
+    if (!MODE_ORDER.includes(mode)) return;
+    game.mode = mode;
+    document.querySelectorAll('#mode-select .mode').forEach(m => {
+        const on = m.dataset.mode === mode;
+        m.classList.toggle('selected', on);
+        m.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+    const sub = document.querySelector('#play-btn .sub');
+    if (sub) {
+        if (mode === 'versus') {
+            sub.textContent = 'Duel the CPU · pick a tier';
+        } else {
+            const best = (loadLifetime()[MODE_BEST_KEY[mode]] || 0);
+            const label = mode.charAt(0).toUpperCase() + mode.slice(1);
+            sub.textContent = best > 0
+                ? `${label} best · ${best.toLocaleString()}`
+                : `${label} · build combos, earn power-ups`;
+        }
+    }
+}
+function cycleMode(dir) {
+    const i = MODE_ORDER.indexOf(game.mode);
+    const next = MODE_ORDER[(i + dir + MODE_ORDER.length) % MODE_ORDER.length];
+    selectMode(next);
+}
+
 function onPlayClicked() {
     // Versus is a separate mode — Play opens its tier picker instead of
     // dropping into the single-player loop.
@@ -4488,6 +4745,22 @@ function wireStep5DOM() {
     guard('act-begin', () => {
         const b = document.getElementById('act-begin');
         if (b) b.addEventListener('click', () => beginNextAct());
+    });
+
+    guard('pause-menu', () => {
+        const byId = (id) => document.getElementById(id);
+        const closePause = () => byId('pause-hint').classList.remove('show');
+        byId('pause-resume').addEventListener('click', () => resumeGame());
+        byId('pause-restart').addEventListener('click', () => {
+            if (game.state !== 'paused') return;
+            closePause();
+            startGame();       // fresh run in the same mode
+        });
+        byId('pause-quit').addEventListener('click', () => {
+            if (game.state !== 'paused') return;
+            closePause();
+            toMenu();
+        });
     });
 
     guard('settings-close', () => {
