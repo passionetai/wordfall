@@ -45,6 +45,8 @@
     let shake = 0;             // camera shake amplitude
     let pulse = 0;             // bloom / glow pulse
     let bossMix = 0;           // 0 = normal city, 1 = boss-wave red
+    let cineMix = 0;           // 0 = gameplay camera, 1 = cinematic menu camera
+    let shiftMix = 0;          // pushes the vanishing point right of the menu column
     const BOSS_TINT = [1.0, 0.3, 0.36];
     const BOSS_FOG = [0.07, 0.012, 0.022];
     const BLOOM_BASE = 0.85;
@@ -452,7 +454,7 @@
         if (!backdrop) return;
         const dist = LEN - NEAR + 20;
         const h = 2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.08;
-        const w = h * camera.aspect;
+        const w = h * camera.aspect * 1.3;   // headroom for the menu film offset
         const ia = BG._imgAspect || 1.78;
         let pw = w, ph = w / ia;
         if (ph < h) { ph = h; pw = h * ia; }
@@ -576,7 +578,11 @@
 
         // Boss waves: ease into a red city and a slower, heavier scroll.
         bossMix += ((view.boss ? 1 : 0) - bossMix) * Math.min(1, dt * 2);
-        let target = BASE_SPEED * (1 - 0.55 * bossMix);
+        // Menu / results: a slower, higher cinematic glide. Eases both ways,
+        // so pressing Play swoops the camera down into the gameplay view.
+        cineMix += ((view.cinematic ? 1 : 0) - cineMix) * Math.min(1, dt * 1.6);
+        shiftMix += ((view.menuShift ? 1 : 0) - shiftMix) * Math.min(1, dt * 1.6);
+        let target = BASE_SPEED * (1 - 0.55 * bossMix) * (1 - 0.55 * cineMix);
         if (view.state === 'paused') target = 0;
         else if (view.state === 'gameover') target = BASE_SPEED * 0.35;
         if (view.freeze) target *= 0.25;
@@ -614,10 +620,18 @@
         shake = view.reduceMotion ? 0 : shake * Math.exp(-dt * 5);
         const jx = (Math.random() - 0.5) * shake * 1.6;
         const jy = (Math.random() - 0.5) * shake * 1.2;
-        camera.position.x = Math.sin(time * 0.13) * 0.9 * drift + jx;
-        camera.position.y = CAM_Y + Math.sin(time * 0.21) * 0.45 * drift + jy;
-        camera.lookAt(camera.position.x * 0.4, LOOK_Y, -100);
-        camera.rotation.z += Math.sin(time * 0.1) * 0.012 * drift + (Math.random() - 0.5) * shake * 0.03;
+        const sway = 1 + cineMix * 2.5;
+        camera.position.x = Math.sin(time * 0.13) * 0.9 * sway * drift + jx;
+        camera.position.y = CAM_Y + cineMix * 9 + Math.sin(time * 0.21) * 0.45 * drift + jy;
+        camera.lookAt(camera.position.x * 0.4, LOOK_Y + cineMix * 4, -100);
+        camera.rotation.z += Math.sin(time * 0.1) * (0.012 + cineMix * 0.02) * drift + (Math.random() - 0.5) * shake * 0.03;
+        // Off-centre projection: slides the whole view so the avenue's
+        // vanishing point sits in the open space beside the menu.
+        const filmOffset = -shiftMix * 0.2 * camera.getFilmWidth();
+        if (Math.abs(camera.filmOffset - filmOffset) > 1e-4) {
+            camera.filmOffset = filmOffset;
+            camera.updateProjectionMatrix();
+        }
 
         render(dt);
     };

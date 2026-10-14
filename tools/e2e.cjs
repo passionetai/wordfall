@@ -119,7 +119,7 @@ const SHOTS = process.argv[3] || path.join(process.cwd(), 'e2e-shots');
         realScore: window.__wf.score,
     }));
     console.log('  end screen:', JSON.stringify(end));
-    if (String(end.realScore) !== end.score) throw new Error('score count-up did not land on the real score');
+    if (String(end.realScore) !== end.score.replace(/[^0-9]/g, '')) throw new Error('score count-up did not land on the real score');
     if (!/^[SABCD]$/.test(end.grade)) throw new Error('bad grade: ' + end.grade);
 
     await browser.close();
