@@ -28,6 +28,7 @@
     // Window texture tile: 16 columns x 64 floors, 8px per window cell.
     const WIN_COLS = 16, WIN_FLOORS = 64, WIN_PX = 8;
     const WIN_TILE_W = WIN_COLS * 1.4, WIN_TILE_H = WIN_FLOORS * 1.8; // world units
+    const BASE_FOV = 62;
     const CAM_Y = 24;          // flying above the avenue, below the tallest towers
     const LOOK_Y = 13;         // look slightly down the avenue
 
@@ -246,6 +247,7 @@
         uniform float uHue;
         uniform vec3 uTint;
         uniform vec3 uFogColor;
+        uniform float uHorizon;   // where the road meets the backdrop (uv.y)
         varying vec2 vUv;
         vec3 hueRotate(vec3 c, float a) {
             // Same idea as CSS hue-rotate(): rotate around the grey axis.
@@ -259,8 +261,11 @@
                 col = texture2D(uMap, vUv).rgb;
                 col = hueRotate(col, uHue) * uDim * uTint;
             }
-            // Melt the lower edge into the fog so the city blends into it.
-            col = mix(uFogColor, col, smoothstep(0.08, 0.45, vUv.y));
+            // Melt into the fog at the horizon so there's no hard seam where
+            // the road ends, with a faint haze glow along it.
+            float h = vUv.y - uHorizon;
+            col = mix(uFogColor, col, smoothstep(0.0, 0.16, h));
+            col += vec3(0.16, 0.06, 0.22) * exp(-abs(h) * 28.0) * uTint;
             gl_FragColor = vec4(col, 1.0);
         }
     `;
@@ -369,7 +374,7 @@
         renderer.setClearColor(new THREE.Color(FOG_COLOR[0], FOG_COLOR[1], FOG_COLOR[2]), 1);
 
         scene = new THREE.Scene();
-        camera = new THREE.PerspectiveCamera(62, 1, 0.5, 400);
+        camera = new THREE.PerspectiveCamera(BASE_FOV, 1, 0.5, 400);
         camera.position.set(0, CAM_Y, 0);
         camera.lookAt(0, LOOK_Y, -100);
 
@@ -397,7 +402,7 @@
         backdropMat = new THREE.ShaderMaterial({
             vertexShader: BACKDROP_VS, fragmentShader: BACKDROP_FS,
             uniforms: Object.assign(fogUniforms(), {
-                uMap: { value: null }, uHasMap: { value: 0 }, uDim: { value: 0.6 },
+                uMap: { value: null }, uHasMap: { value: 0 }, uDim: { value: 0.6 }, uHorizon: { value: 0.3 },
                 uHue: { value: 0 }, uTint: tint(),
             }),
             depthTest: false, depthWrite: false,
@@ -452,7 +457,10 @@
         let pw = w, ph = w / ia;
         if (ph < h) { ph = h; pw = h * ia; }
         backdrop.scale.set(pw, ph, 1);
-        backdrop.position.set(0, CAM_Y - dist * (CAM_Y - LOOK_Y) / 100 + ph * 0.12, -dist);
+        const cy = CAM_Y - dist * (CAM_Y - LOOK_Y) / 100 + ph * 0.12;
+        backdrop.position.set(0, cy, -dist);
+        // The ground plane (y = 0) ends at the backdrop's depth.
+        backdropMat.uniforms.uHorizon.value = 0.5 - cy / ph;
     }
 
     function applyQuality() {
@@ -466,19 +474,55 @@
     function resize(w, h) {
         if (!renderer) return;
         viewW = w; viewH = h;
-        const dpr = Math.min(window.devicePixelRatio || 1, quality === 'high' ? 1.25 : 1);
+        // The 3D layer is a soft, glowing backdrop, so it never needs more
+        // than ~1.25x pixels; text stays sharp on the 2D canvas regardless.
+        const dpr = Math.min(window.devicePixelRatio || 1, quality === 'high' ? 1.25 : 1) * resScale;
         renderer.setPixelRatio(dpr);
         renderer.setSize(w, h, false);
         composer.setPixelRatio(dpr);
         composer.setSize(w, h);
         camera.aspect = w / Math.max(1, h);
+        // Portrait screens: widen the vertical FOV so the horizontal view
+        // still takes in the avenue and both sides of the street.
+        const minHFov = THREE.MathUtils.degToRad(56);
+        const needV = 2 * Math.atan(Math.tan(minHFov / 2) / camera.aspect);
+        camera.fov = Math.min(84, Math.max(BASE_FOV, THREE.MathUtils.radToDeg(needV)));
         camera.updateProjectionMatrix();
         fitBackdrop();
+    }
+
+    // Frame-rate safety net: if the page drops under ~50fps, render the 3D
+    // layer at a lower resolution (down to 60%); restore it when there's
+    // headroom again. Hitches (tab switches, GC pauses) are ignored.
+    let resScale = 1, perfFrames = 0, perfMs = 0, goodWindows = 0;
+    function adaptResolution(dtMs) {
+        if (dtMs > 250) return;
+        perfFrames++;
+        perfMs += dtMs;
+        if (perfMs < 2000) return;
+        const fps = perfFrames * 1000 / perfMs;
+        perfFrames = 0; perfMs = 0;
+        if (fps < 50 && resScale > 0.6) {
+            resScale = Math.max(0.6, resScale * 0.8);
+            goodWindows = 0;
+            resize(viewW, viewH);
+        } else if (fps > 57 && resScale < 1) {
+            // Step back up only after a sustained good stretch, so the
+            // resolution doesn't bounce around at the threshold.
+            if (++goodWindows >= 3) {
+                resScale = Math.min(1, resScale / 0.8);
+                goodWindows = 0;
+                resize(viewW, viewH);
+            }
+        } else {
+            goodWindows = 0;
+        }
     }
 
     // ---------- Public API ----------
     BG.setQuality = function (q) {
         quality = q === 'low' ? 'low' : 'high';
+        resScale = 1; perfFrames = 0; perfMs = 0; goodWindows = 0;
         if (renderer) applyQuality();
     };
 
@@ -509,7 +553,7 @@
     };
 
     // Debug handle for tests/tuning only.
-    BG._debug = () => ({ renderer, composer, bloomPass, camera, scene });
+    BG._debug = () => ({ renderer, composer, bloomPass, camera, scene, resScale });
 
     BG.resize = function (w, h) { if (BG.ready || renderer) resize(w, h); };
 
@@ -526,6 +570,7 @@
     // view: { state, hue, freeze, boss, reduceMotion } — read-only snapshot.
     BG.frame = function (dtMs, view) {
         if (!BG.ready) return;
+        adaptResolution(dtMs);
         const dt = Math.min(0.064, dtMs / 1000);
         time += dt;
 
