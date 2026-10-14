@@ -2330,23 +2330,26 @@ function loop(now) {
         game.fps = (game.fps == null) ? inst : (game.fps * 0.92 + inst * 0.08);
     }
 
-    if (game.state === 'loading') {
+    // 1) Advance game logic. Nothing in this block draws.
+    const versus = Versus.isActive();
+    if (versus) {
+        Versus.update(dt);
+    } else if (game.state === 'loading') {
         game.loadT += dt;
-        drawLoadingScreen();
     } else if (game.state === 'detonated') {
         // Hold DETONATED overlay for ~1s before standard game-over.
         game.detonateT -= dt;
-        draw(dt);
-        drawDetonatedOverlay();
-        if (game.detonateT <= 0) gameOver('DETONATED');
     } else if (game.state === 'actbreak') {
         updateActBreak(dt);
-        draw(dt);
-    } else {
-        if (game.state === 'playing') update(dt);
-        draw(dt);
-        if (game.bossState === 'warning') drawBossWarningOverlay();
+    } else if (game.state === 'playing') {
+        update(dt);
     }
+
+    // 2) Draw the frame. All drawing goes through this single entry point.
+    Renderer.frame(dt);
+
+    // 3) The detonated hold ends only after its final frame has been drawn.
+    if (!versus && game.state === 'detonated' && game.detonateT <= 0) gameOver('DETONATED');
     requestAnimationFrame(loop);
 }
 
@@ -2720,9 +2723,8 @@ function drawBackground(ctx, w, h, dt) {
         ctx.fillRect(0, 0, w, h);
     }
 
+    // Star drift is advanced in Renderer.tick(); this only draws them.
     for (const s of game.bgStars) {
-        s.y += 0.02 * s.z * dt * (game.freezeTimer > 0 ? 0.25 : 1);
-        if (s.y > h) { s.y = -2; s.x = Math.random() * w; }
         ctx.globalAlpha = 0.25;
         ctx.fillStyle = act.star;
         ctx.fillRect(s.x, s.y, s.r, s.r);
@@ -3047,7 +3049,6 @@ function drawBossWord(ctx, boss) {
             glow = 36;
         }
         drawWordSegment(ctx, li.ch, x, y, col, glowCol, glow, false);
-        if (li.regrowT && li.regrowT > 0) li.regrowT = Math.max(0, li.regrowT - 16);
     }
     ctx.restore();
 }
@@ -4053,7 +4054,6 @@ function drawTouchKeyboard(ctx) {
         }
         ctx.shadowBlur = 0;
         ctx.restore();
-        if (k.flashT > 0) k.flashT = Math.max(0, k.flashT - 16);
     }
 }
 
@@ -4307,6 +4307,46 @@ function drawFPS(ctx) {
     ctx.shadowBlur = 0;
     ctx.restore();
 }
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  MODULE: Renderer — the one entry point for all drawing     ║
+// ╚══════════════════════════════════════════════════════════════╝
+// loop() advances game logic, then calls Renderer.frame(dt) once per
+// frame. Everything that reaches the screen goes through here, so visual
+// layers can be added or swapped without touching gameplay code.
+const Renderer = {
+    // Cosmetic-only animation (never read by gameplay). Runs only on
+    // frames where the main scene is drawn, exactly as it did when this
+    // lived inside the draw functions.
+    tick(dt) {
+        const w = game.w, h = game.h;
+        const starSpeed = game.freezeTimer > 0 ? 0.25 : 1;
+        for (const s of game.bgStars) {
+            s.y += 0.02 * s.z * dt * starSpeed;
+            if (s.y > h) { s.y = -2; s.x = Math.random() * w; }
+        }
+        for (const word of game.words) {
+            if (word.type !== 'boss') continue;
+            for (const li of word.letters) {
+                if (li.alive && li.regrowT && li.regrowT > 0) li.regrowT = Math.max(0, li.regrowT - 16);
+            }
+        }
+        if (isTouchActive()) {
+            for (const k of game.touchKeys) {
+                if (k.flashT > 0) k.flashT = Math.max(0, k.flashT - 16);
+            }
+        }
+    },
+
+    frame(dt) {
+        if (Versus.isActive()) { Versus.draw(game.ctx); return; }
+        if (game.state === 'loading') { drawLoadingScreen(); return; }
+        this.tick(dt);
+        draw(dt);
+        if (game.state === 'detonated') drawDetonatedOverlay();
+        else if (game.state !== 'actbreak' && game.bossState === 'warning') drawBossWarningOverlay();
+    },
+};
 
 // ====================================================================
 // ╔══════════════════════════════════════════════════════════════╗
@@ -5842,24 +5882,6 @@ const Versus = (() => {
             if (Versus.onKey(e)) return;
         }
         return origOnKey.call(this, e);
-    };
-})();
-
-// Patch the main render loop to drive Versus when active.
-(function wireVersusLoop() {
-    const origLoop = loop;
-    loop = function (now) {
-        if (Versus.isActive()) {
-            const dt = Math.min(64, now - (game.last || now));
-            game.last = now;
-            if (game.fps == null) game.fps = 60;
-            else game.fps = game.fps * 0.92 + (1000 / Math.max(1, dt)) * 0.08;
-            Versus.update(dt);
-            Versus.draw(game.ctx);
-            requestAnimationFrame(loop);
-            return;
-        }
-        origLoop(now);
     };
 })();
 
