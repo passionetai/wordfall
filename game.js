@@ -3334,6 +3334,7 @@ function drawTopHud(ctx, w, h) {
     label('LEVEL', levelX, y);
     ctx.font = valueFont; ctx.fillStyle = '#F4F7FF';
     ctx.fillText(String(game.level), levelX, y + 27);
+    const levelEnd = levelX + Math.max(44, ctx.measureText(String(game.level)).width) + 16;
 
     if (!narrow) {
         ctx.textAlign = 'center';
@@ -3350,7 +3351,7 @@ function drawTopHud(ctx, w, h) {
     const rightX = w - padX - (isTouchActive() ? 60 : 0);
     let rightConsumed = 0;
     if (game.bossState === 'fighting' && game.bossActive) {
-        rightConsumed = drawBossProgressBar(ctx, rightX, 14);
+        rightConsumed = drawBossProgressBar(ctx, rightX, 14, levelEnd);
     } else {
         rightConsumed = drawHearts(ctx, rightX, 30);
     }
@@ -3405,11 +3406,12 @@ function drawHeartPath(ctx, size) {
     ctx.closePath();
 }
 
-function drawBossProgressBar(ctx, rightX, topY) {
+function drawBossProgressBar(ctx, rightX, topY, leftLimit) {
     const boss = game.bossActive;
     const remaining = boss.text.length - boss.typed;
-    // Wide enough that the seconds and "BOSS · N LEFT" labels never overlap.
-    const barW = Math.max(150, Math.round(game.w * 0.18));
+    // Wide enough that the seconds and "BOSS · N LEFT" labels never overlap,
+    // but never reaching back over the LEVEL readout on very narrow phones.
+    const barW = Math.min(Math.max(150, Math.round(game.w * 0.18)), rightX - leftLimit);
     const x = rightX - barW;
     const t = performance.now();
 
@@ -3456,7 +3458,7 @@ function drawBossProgressBar(ctx, rightX, topY) {
     ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#F0F4FF';
-    ctx.fillText(`BOSS · ${remaining} LEFT`, rightX, y + tH + 3);
+    ctx.fillText(barW < 150 ? `${remaining} LEFT` : `BOSS · ${remaining} LEFT`, rightX, y + tH + 3);
     // seconds, colour-coded, on the left of the same line
     ctx.textAlign = 'left';
     ctx.fillStyle = timerCol;
