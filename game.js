@@ -1473,9 +1473,9 @@ function pickBossText() {
         const w = DeepSeek.take('boss');
         if (w) return w;
     }
-    // Local fallback: bias toward longer words as level climbs so each
-    // boss feels harder than the last.
-    const minLen = Math.min(15, 10 + Math.floor((game.level - 5) / 2));
+    // Local fallback: long words from the very first boss (11+ letters),
+    // getting longer each boss tier.
+    const minLen = Math.min(13, 11 + bossTier(game.level));
     let pool = BOSS_WORDS.filter(w => w.length >= minLen);
     if (pool.length === 0) pool = BOSS_WORDS;
     return pool[rngInt(pool.length)];
@@ -1504,10 +1504,10 @@ function actConfig(actNum) {
 function bossTier(level) { return Math.max(0, Math.floor((level - 5) / 5)); }
 
 function bossSpeedForLevel(level) {
-    // Softer ramp: 0.5× baseFallSpeed at L5 → capped at 1.2× by L40.
-    // The countdown timer is the primary pressure; fall speed is the secondary.
+    // 0.8× baseFallSpeed at the first boss (L5), +0.1× per tier, capped
+    // at 1.6×. The countdown timer is still the main pressure.
     const tier = bossTier(level);
-    return baseFallSpeed() * Math.min(1.2, 0.5 + tier * 0.09);
+    return baseFallSpeed() * Math.min(1.6, 0.8 + tier * 0.1);
 }
 
 function bossSizeMultiplierForLevel(level) {
@@ -1515,20 +1515,40 @@ function bossSizeMultiplierForLevel(level) {
     return Math.min(3.4, 2.5 + Math.max(0, level - 5) * 0.04);
 }
 
-// Milliseconds allowed per boss letter. Generous on the first boss and
-// loosened overall — the descent moves bit by bit per tier so each stage
-// only nudges the squeeze tighter.
-//   L5: 1200 (≈14s on a 12-letter boss)
-//   L10: 1100, L15: 1000, L20: 900, L25: 800, L30: 700
-//   floor 650.
+// Milliseconds allowed per boss letter. Bosses are a real test from the
+// first one:
+//   L5: 800 (≈9.6s on a 12-letter boss)
+//   L10: 740, L15: 680, L20: 620, L25: 560, L30: 500
+//   floor 480.
 function bossPerLetterMs(level) {
-    return Math.max(650, 1200 - bossTier(level) * 100);
+    return Math.max(480, 800 - bossTier(level) * 60);
 }
 
 // Idle window (ms) before an unfinished boss starts regrowing letters.
-// Disabled below L10; loosened so the regrowth penalty is less twitchy.
+// Active from the first boss: 1200ms at L5, -100ms per tier, floor 650.
 function bossRegrowIdleMs(level) {
-    return Math.max(1400, 2600 - bossTier(level) * 240);
+    return Math.max(650, 1200 - bossTier(level) * 100);
+}
+
+// Typo during a boss fight: costs countdown time (450ms at L5, +50ms per
+// tier, max 800ms) and the last shattered letter grows back.
+function bossTypoPenaltyMs(level) {
+    return Math.min(800, 450 + bossTier(level) * 50);
+}
+
+// Re-grow the most recently shattered boss letter (stalling or a typo).
+function regrowBossLetter(boss) {
+    const li = boss.letters[boss.typed - 1];
+    if (!li) return false;
+    li.alive = true;
+    li.shatterT = 0;
+    li.regrowT = 280;
+    boss.typed--;
+    boss.idleT = 0;
+    game.flash = Math.max(game.flash, 0.22); game.flashColor = '#FF8A00';
+    game.shake = Math.max(game.shake, 5);
+    renderInput();
+    return true;
 }
 
 function spawnBoss() {
@@ -1562,7 +1582,7 @@ function spawnBoss() {
         timeLimit, timeLeft: timeLimit,
         timerArmed: false,
         idleT: 0,
-        regrowEnabled: game.level >= 10,
+        regrowEnabled: true,
         regrowIdleMs: bossRegrowIdleMs(game.level),
     };
     game.words.push(boss);
@@ -1844,6 +1864,13 @@ function onKey(e) {
         game.keyErrors++;
         if (game.combo > 2) game.combo = Math.max(0, game.combo - 1);
         game.shake = Math.max(game.shake, 4);
+        // Bosses punish typos: lose countdown time and a letter grows back.
+        const boss = game.target;
+        if (boss.type === 'boss' && boss.timerArmed) {
+            boss.timeLeft -= bossTypoPenaltyMs(game.level);
+            if (boss.typed > 0) regrowBossLetter(boss);
+            else { game.flash = Math.max(game.flash, 0.22); game.flashColor = '#FF8A00'; }
+        }
     }
 }
 
@@ -2413,17 +2440,7 @@ function update(dt) {
             if (boss.regrowEnabled && boss.typed > 0 && boss.typed < boss.text.length
                 && boss.idleT >= boss.regrowIdleMs) {
                 // Idling too long → the most recently shattered letter regrows.
-                const li = boss.letters[boss.typed - 1];
-                if (li) {
-                    li.alive = true;
-                    li.shatterT = 0;
-                    li.regrowT = 280;
-                    boss.typed--;
-                    boss.idleT = 0;
-                    game.flash = Math.max(game.flash, 0.22); game.flashColor = '#FF8A00';
-                    game.shake = Math.max(game.shake, 5);
-                    renderInput();
-                }
+                regrowBossLetter(boss);
             }
             if (boss.timeLeft <= 0) {
                 bossEscaped(boss);
@@ -2576,7 +2593,7 @@ const SPLASH_TIPS = [
     'Red bomb words end the run if they land',
     'Gold bonus words grant instant power-ups',
     'Green twin words are linked — type both fast',
-    'A boss drops every 5 levels. Type it letter by letter',
+    'Bosses punish typos — a wrong key regrows a letter',
     'Backspace drops your lock so you can re-target',
     'Combos in Versus make your attacks fly faster',
 ];
@@ -4506,7 +4523,7 @@ const Tutorial = (() => {
         },
         {
             title: 'WATCH FOR DANGER',
-            body: 'Red bombs end the run instantly. Gold bonuses grant power-ups. Green twins are linked — type both quickly. Every 5 levels: BOSS.',
+            body: 'Red bombs end the run instantly. Gold bonuses grant power-ups. Green twins are linked — type both quickly. Every 5 levels a BOSS hits: beat the clock, and don\'t typo — mistakes regrow letters.',
             draw: drawDemoWordTypes,
         },
     ];
