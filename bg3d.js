@@ -37,6 +37,14 @@
     let THREE, canvas, renderer, scene, camera, composer, bloomPass;
     let buildingMat, groundMat, rainMat, backdropMat, backdrop;
     let scroll = 0, time = 0, speed = BASE_SPEED;
+    // Event reactions (all decay back to rest on their own).
+    let shake = 0;             // camera shake amplitude
+    let pulse = 0;             // bloom / glow pulse
+    let bossMix = 0;           // 0 = normal city, 1 = boss-wave red
+    const BOSS_TINT = [1.0, 0.3, 0.36];
+    const BOSS_FOG = [0.07, 0.012, 0.022];
+    const BLOOM_BASE = 0.85;
+    let fogColor = null, tintVec = null;   // shared by every material
     let viewW = 0, viewH = 0;
 
     function loadScript(src) {
@@ -256,7 +264,7 @@
 
     function fogUniforms() {
         return {
-            uFogColor: { value: new THREE.Color(FOG_COLOR[0], FOG_COLOR[1], FOG_COLOR[2]) },
+            uFogColor: { value: fogColor },
             uFogNear: { value: FOG_NEAR },
             uFogFar: { value: FOG_FAR },
         };
@@ -362,7 +370,9 @@
         camera.position.set(0, CAM_Y, 0);
         camera.lookAt(0, LOOK_Y, -100);
 
-        const tint = () => ({ value: new THREE.Vector3(1, 1, 1) });
+        fogColor = new THREE.Color(FOG_COLOR[0], FOG_COLOR[1], FOG_COLOR[2]);
+        tintVec = new THREE.Vector3(1, 1, 1);
+        const tint = () => ({ value: tintVec });
         buildingMat = new THREE.ShaderMaterial({
             vertexShader: BUILDING_VS, fragmentShader: BUILDING_FS,
             uniforms: Object.assign(fogUniforms(), wrapUniforms(), {
@@ -415,7 +425,7 @@
 
         composer = new THREE.EffectComposer(renderer);
         composer.addPass(new THREE.RenderPass(scene, camera));
-        bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(256, 256), 0.85, 0.55, 0.2);
+        bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(256, 256), BLOOM_BASE, 0.55, 0.2);
         composer.addPass(bloomPass);
 
         resize(window.innerWidth, window.innerHeight);
@@ -481,18 +491,46 @@
 
     BG.resize = function (w, h) { if (BG.ready || renderer) resize(w, h); };
 
-    // view: { state, hue, freeze } — read-only snapshot from the game.
+    // Gameplay events, detected by game.js from read-only state.
+    //   lifeLost      -> camera shake
+    //   detonated     -> bigger camera shake
+    //   wordDestroyed -> brief bloom pulse
+    BG.event = function (name) {
+        if (name === 'lifeLost') shake = Math.max(shake, 1.0);
+        else if (name === 'detonated') shake = Math.max(shake, 1.8);
+        else if (name === 'wordDestroyed') pulse = Math.min(1.4, pulse + 1);
+    };
+
+    // view: { state, hue, freeze, boss, reduceMotion } — read-only snapshot.
     BG.frame = function (dtMs, view) {
         if (!BG.ready) return;
         const dt = Math.min(0.064, dtMs / 1000);
         time += dt;
 
-        let target = BASE_SPEED;
+        // Boss waves: ease into a red city and a slower, heavier scroll.
+        bossMix += ((view.boss ? 1 : 0) - bossMix) * Math.min(1, dt * 2);
+        let target = BASE_SPEED * (1 - 0.55 * bossMix);
         if (view.state === 'paused') target = 0;
         else if (view.state === 'gameover') target = BASE_SPEED * 0.35;
         if (view.freeze) target *= 0.25;
+        if (view.reduceMotion) target *= 0.5;
         speed += (target - speed) * Math.min(1, dt * 2.5);
         scroll += speed * dt;
+
+        tintVec.set(
+            1 + (BOSS_TINT[0] - 1) * bossMix,
+            1 + (BOSS_TINT[1] - 1) * bossMix,
+            1 + (BOSS_TINT[2] - 1) * bossMix);
+        fogColor.setRGB(
+            FOG_COLOR[0] + (BOSS_FOG[0] - FOG_COLOR[0]) * bossMix,
+            FOG_COLOR[1] + (BOSS_FOG[1] - FOG_COLOR[1]) * bossMix,
+            FOG_COLOR[2] + (BOSS_FOG[2] - FOG_COLOR[2]) * bossMix);
+
+        // Word destroyed: a quick swell of glow that fades in ~0.3s.
+        pulse *= Math.exp(-dt * 7);
+        bloomPass.strength = BLOOM_BASE + pulse * 0.9;
+        buildingMat.uniforms.uGlow.value = 1 + pulse * 0.35;
+        groundMat.uniforms.uGlow.value = 1 + pulse * 0.5;
 
         buildingMat.uniforms.uScroll.value = scroll;
         buildingMat.uniforms.uTime.value = time;
@@ -501,11 +539,16 @@
         rainMat.uniforms.uTime.value = time;
         backdropMat.uniforms.uHue.value = (view.hue || 0) * Math.PI / 180;
 
-        // Gentle drift so the flight feels alive.
-        camera.position.x = Math.sin(time * 0.13) * 0.9;
-        camera.position.y = CAM_Y + Math.sin(time * 0.21) * 0.45;
+        // Gentle drift so the flight feels alive, plus life-lost shake.
+        // Reduce Motion (game setting) turns both off.
+        const drift = view.reduceMotion ? 0 : 1;
+        shake = view.reduceMotion ? 0 : shake * Math.exp(-dt * 5);
+        const jx = (Math.random() - 0.5) * shake * 1.6;
+        const jy = (Math.random() - 0.5) * shake * 1.2;
+        camera.position.x = Math.sin(time * 0.13) * 0.9 * drift + jx;
+        camera.position.y = CAM_Y + Math.sin(time * 0.21) * 0.45 * drift + jy;
         camera.lookAt(camera.position.x * 0.4, LOOK_Y, -100);
-        camera.rotation.z += Math.sin(time * 0.1) * 0.012;
+        camera.rotation.z += Math.sin(time * 0.1) * 0.012 * drift + (Math.random() - 0.5) * shake * 0.03;
 
         composer.render(dt);
     };

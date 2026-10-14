@@ -61,6 +61,21 @@ const [VW, VH] = (process.argv[4] || '1366x768').split('x').map(Number);
     }
     const has3D = await page.evaluate(() => !!(window.WordfallBG3D && window.WordfallBG3D.ready));
     console.log('  3D layer:', has3D ? 'on' : 'off (2D fallback)');
+    if (has3D) {
+        // Record the gameplay events the renderer forwards to the 3D layer.
+        await page.evaluate(() => {
+            const bg = window.WordfallBG3D;
+            window.__bgEvents = [];
+            const orig = bg.event;
+            bg.event = (n) => { window.__bgEvents.push(n); return orig(n); };
+        });
+    }
+    const expectEvent = async (name) => {
+        if (!has3D) return;
+        await page.waitForFunction((n) => window.__bgEvents.includes(n), name, { timeout: 4000 })
+            .catch(() => { throw new Error('3D layer never received event: ' + name); });
+        console.log('  event ok:', name);
+    };
     await page.waitForTimeout(1000);
     await shot('menu');
 
@@ -81,6 +96,7 @@ const [VW, VH] = (process.argv[4] || '1366x768').split('x').map(Number);
         if (text) await page.keyboard.type(text, { delay: 20 });
         else await page.waitForTimeout(200);
     }
+    await expectEvent('wordDestroyed');
     await page.waitForTimeout(500);
     await shot('boss-warning');
     // The boss spawns above the screen and drifts in; wait until it's visible.
@@ -94,7 +110,7 @@ const [VW, VH] = (process.argv[4] || '1366x768').split('x').map(Number);
         const w = g.words.find(x => x.type !== 'boss' && x.type !== 'decoy' && x.type !== 'bomb');
         if (w) w.y = g.h + 50;
     });
-    await page.waitForTimeout(300);
+    await expectEvent('lifeLost');
     await shot('life-lost');
 
     step('bomb -> DETONATED hold -> game over');
@@ -106,6 +122,7 @@ const [VW, VH] = (process.argv[4] || '1366x768').split('x').map(Number);
         w.y = g.h + 50;
     });
     await page.waitForFunction(() => window.__wf.state === 'detonated', null, { timeout: 4000 });
+    await expectEvent('detonated');
     await page.waitForTimeout(300);
     await shot('detonated');
     await page.waitForSelector('#gameover.show', { timeout: 6000 });

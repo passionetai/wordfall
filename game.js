@@ -4373,13 +4373,39 @@ const Renderer = {
         const bg = window.WordfallBG3D;
         if (bg && typeof bg.resize === 'function') bg.resize(game.w, game.h);
     },
+    // Gameplay events are detected by comparing read-only counters with
+    // last frame's values, so no gameplay code needs to call into here.
+    _seen: null,
+    watchEvents(state) {
+        const vs = state === 'versus' ? Versus.snapshot() : null;
+        const now = {
+            mode: vs ? 'versus' : 'solo',
+            lives: vs ? vs.youLives : game.lives,
+            words: vs ? vs.youWords : game.wordsCompleted,
+            detonated: state === 'detonated',
+        };
+        const was = this._seen;
+        this._seen = now;
+        const events = [];
+        if (!was || was.mode !== now.mode) return events;
+        if (now.lives < was.lives) events.push('lifeLost');
+        if (now.detonated && !was.detonated) events.push('detonated');
+        if (now.words > was.words) events.push('wordDestroyed');
+        return events;
+    },
+
     // Read-only snapshot of what the 3D layer should show this frame.
     frame3D(dt, state) {
+        const events = this.watchEvents(state);
         if (!this.has3D()) return;
-        window.WordfallBG3D.frame(dt, {
+        const bg = window.WordfallBG3D;
+        for (const e of events) bg.event(e);
+        bg.frame(dt, {
             state,
             hue: actConfig(game.act || 1).hue,
             freeze: state !== 'versus' && game.freezeTimer > 0,
+            boss: state !== 'versus' && game.bossState !== 'none',
+            reduceMotion: reduceMotion(),
         });
     },
 
@@ -5919,6 +5945,10 @@ const Versus = (() => {
 
     function openPicker() { show('versus-setup'); }
     function isActive() { return state.active; }
+    // Read-only numbers for the visual layer (camera shake, bloom pulse).
+    function snapshot() {
+        return { youLives: state.you ? state.you.lives : 0, youWords: state.you ? state.you.wordsTyped : 0 };
+    }
     function quitToMenu() {
         state.active = false;
         state.words = []; state.particles = []; state.floaters = [];
@@ -5926,7 +5956,7 @@ const Versus = (() => {
         toMenu();
     }
 
-    return { TIERS, openPicker, start, update, draw, onKey, isActive, quitToMenu };
+    return { TIERS, openPicker, start, update, draw, onKey, isActive, snapshot, quitToMenu };
 })();
 
 // Route keystrokes to Versus when active (before single-player input).
