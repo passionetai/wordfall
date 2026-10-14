@@ -7,7 +7,8 @@
 //   THREE_JS=/path/to/three.min.js  serves that file in place of the cdnjs
 //   URL (for sandboxes without CDN access; use npm three@0.128.0's
 //   build/three.min.js). EXPECT_3D=1 fails the run if the 3D layer
-//   doesn't start. GFX=high|low presets the Graphics setting.
+//   doesn't start. GFX=high|low presets the Graphics setting. TOUCH=1
+//   emulates a phone (touch keyboard + touch power-up row).
 //
 // Fails on any page error / console error. Saves a screenshot per path.
 
@@ -32,7 +33,9 @@ const [VW, VH] = (process.argv[4] || '1366x768').split('x').map(Number);
         args: ['--autoplay-policy=no-user-gesture-required', '--enable-unsafe-swiftshader'],
     });
     // Service workers fetch on their own and would bypass the THREE_JS route.
+    const touch = !!process.env.TOUCH;
     const page = await browser.newPage({ viewport: { width: VW, height: VH },
+        hasTouch: touch, isMobile: touch,
         serviceWorkers: process.env.THREE_JS ? 'block' : 'allow' });
     const errors = [];
     page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
@@ -52,7 +55,7 @@ const [VW, VH] = (process.argv[4] || '1366x768').split('x').map(Number);
                 headers: { 'Access-Control-Allow-Origin': '*' } }));
     }
     const step = (name) => console.log('•', name);
-    const tag = `${VW}x${VH}`;
+    const tag = `${VW}x${VH}${touch ? '-touch' : ''}`;
     const shot = (name) => page.screenshot({ path: path.join(SHOTS, `${tag}-${name}.png`) });
 
     await page.goto(BASE + '/?debug', { waitUntil: 'domcontentloaded' });
