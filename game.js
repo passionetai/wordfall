@@ -916,12 +916,21 @@ function init() {
     try { if (/[?&]debug\b/.test(location.search)) window.__wf = game; } catch (e) {}
     game.canvas = document.getElementById('game');
     game.ctx = game.canvas.getContext('2d');
+    // Canvas-only fonts aren't fetched until first use; ask for them now so
+    // the splash and word widths use the real faces from the start.
+    try {
+        if (document.fonts && document.fonts.load) {
+            ['400 20px VT323', '800 20px Sora', '600 20px Sora', '500 14px Inter', '700 14px Inter']
+                .forEach(f => document.fonts.load(f).catch(() => {}));
+        }
+    } catch (e) {}
     game.high = loadHigh();
     Settings.load();
     Settings.apply();
     refreshHighUI();
     resize();
     seedStars();
+    Renderer.init3D();
     window.addEventListener('resize', resize);
     document.addEventListener('keydown', onKey);
     // First user interaction unlocks WebAudio AND starts the music loop.
@@ -1023,6 +1032,7 @@ function resize() {
     game.canvas.style.height = game.h + 'px';
     game.ctx.setTransform(game.dpr, 0, 0, game.dpr, 0, 0);
     if (game.touchKeys) computeTouchKeyboardRects();
+    Renderer.resize3D();
 }
 
 function seedStars() {
@@ -1471,9 +1481,9 @@ function pickBossText() {
         const w = DeepSeek.take('boss');
         if (w) return w;
     }
-    // Local fallback: bias toward longer words as level climbs so each
-    // boss feels harder than the last.
-    const minLen = Math.min(15, 10 + Math.floor((game.level - 5) / 2));
+    // Local fallback: long words from the very first boss (11+ letters),
+    // getting longer each boss tier.
+    const minLen = Math.min(13, 11 + bossTier(game.level));
     let pool = BOSS_WORDS.filter(w => w.length >= minLen);
     if (pool.length === 0) pool = BOSS_WORDS;
     return pool[rngInt(pool.length)];
@@ -1502,10 +1512,10 @@ function actConfig(actNum) {
 function bossTier(level) { return Math.max(0, Math.floor((level - 5) / 5)); }
 
 function bossSpeedForLevel(level) {
-    // Softer ramp: 0.5× baseFallSpeed at L5 → capped at 1.2× by L40.
-    // The countdown timer is the primary pressure; fall speed is the secondary.
+    // 0.8× baseFallSpeed at the first boss (L5), +0.1× per tier, capped
+    // at 1.6×. The countdown timer is still the main pressure.
     const tier = bossTier(level);
-    return baseFallSpeed() * Math.min(1.2, 0.5 + tier * 0.09);
+    return baseFallSpeed() * Math.min(1.6, 0.8 + tier * 0.1);
 }
 
 function bossSizeMultiplierForLevel(level) {
@@ -1513,20 +1523,40 @@ function bossSizeMultiplierForLevel(level) {
     return Math.min(3.4, 2.5 + Math.max(0, level - 5) * 0.04);
 }
 
-// Milliseconds allowed per boss letter. Generous on the first boss and
-// loosened overall — the descent moves bit by bit per tier so each stage
-// only nudges the squeeze tighter.
-//   L5: 1200 (≈14s on a 12-letter boss)
-//   L10: 1100, L15: 1000, L20: 900, L25: 800, L30: 700
-//   floor 650.
+// Milliseconds allowed per boss letter. Bosses are a real test from the
+// first one:
+//   L5: 800 (≈9.6s on a 12-letter boss)
+//   L10: 740, L15: 680, L20: 620, L25: 560, L30: 500
+//   floor 480.
 function bossPerLetterMs(level) {
-    return Math.max(650, 1200 - bossTier(level) * 100);
+    return Math.max(480, 800 - bossTier(level) * 60);
 }
 
 // Idle window (ms) before an unfinished boss starts regrowing letters.
-// Disabled below L10; loosened so the regrowth penalty is less twitchy.
+// Active from the first boss: 1200ms at L5, -100ms per tier, floor 650.
 function bossRegrowIdleMs(level) {
-    return Math.max(1400, 2600 - bossTier(level) * 240);
+    return Math.max(650, 1200 - bossTier(level) * 100);
+}
+
+// Typo during a boss fight: costs countdown time (450ms at L5, +50ms per
+// tier, max 800ms) and the last shattered letter grows back.
+function bossTypoPenaltyMs(level) {
+    return Math.min(800, 450 + bossTier(level) * 50);
+}
+
+// Re-grow the most recently shattered boss letter (stalling or a typo).
+function regrowBossLetter(boss) {
+    const li = boss.letters[boss.typed - 1];
+    if (!li) return false;
+    li.alive = true;
+    li.shatterT = 0;
+    li.regrowT = 280;
+    boss.typed--;
+    boss.idleT = 0;
+    game.flash = Math.max(game.flash, 0.22); game.flashColor = '#FF8A00';
+    game.shake = Math.max(game.shake, 5);
+    renderInput();
+    return true;
 }
 
 function spawnBoss() {
@@ -1534,9 +1564,16 @@ function spawnBoss() {
     game.words = game.words.filter(w => w.type === 'boss');
     const text = pickBossText();
     const sizeBase = fontSizeForText(text); // VT323 sized for length already
-    const size = Math.round(sizeBase * bossSizeMultiplierForLevel(game.level));
+    let size = Math.round(sizeBase * bossSizeMultiplierForLevel(game.level));
     game.ctx.font = `400 ${size}px 'VT323', monospace`;
-    const totalWidth = game.ctx.measureText(text).width;
+    let totalWidth = game.ctx.measureText(text).width;
+    // Long boss words at big sizes overflow a phone-width screen; shrink to fit.
+    const maxWidth = game.w - 32;
+    if (totalWidth > maxWidth) {
+        size = Math.floor(size * maxWidth / totalWidth);
+        game.ctx.font = `400 ${size}px 'VT323', monospace`;
+        totalWidth = game.ctx.measureText(text).width;
+    }
     // Per-letter positions (so typed letters don't reflow remaining ones).
     const letters = [];
     let xCursor = 0;
@@ -1560,7 +1597,7 @@ function spawnBoss() {
         timeLimit, timeLeft: timeLimit,
         timerArmed: false,
         idleT: 0,
-        regrowEnabled: game.level >= 10,
+        regrowEnabled: true,
         regrowIdleMs: bossRegrowIdleMs(game.level),
     };
     game.words.push(boss);
@@ -1842,6 +1879,13 @@ function onKey(e) {
         game.keyErrors++;
         if (game.combo > 2) game.combo = Math.max(0, game.combo - 1);
         game.shake = Math.max(game.shake, 4);
+        // Bosses punish typos: lose countdown time and a letter grows back.
+        const boss = game.target;
+        if (boss.type === 'boss' && boss.timerArmed) {
+            boss.timeLeft -= bossTypoPenaltyMs(game.level);
+            if (boss.typed > 0) regrowBossLetter(boss);
+            else { game.flash = Math.max(game.flash, 0.22); game.flashColor = '#FF8A00'; }
+        }
     }
 }
 
@@ -2271,7 +2315,7 @@ function showToast(text, color) {
 }
 
 function refreshHighUI() {
-    document.getElementById('hs-score').textContent = game.high.score || 0;
+    document.getElementById('hs-score').textContent = (game.high.score || 0).toLocaleString();
     document.getElementById('hs-wpm').textContent   = game.high.wpm   || 0;
     document.getElementById('hs-combo').textContent = game.high.combo || 0;
 }
@@ -2306,14 +2350,14 @@ function runGrade(acc, wpm, words) {
 function countUp(el, target, delayMs = 0) {
     if (!el) return;
     const token = (el._countToken = (el._countToken || 0) + 1);
-    if (reduceMotion() || target <= 0) { el.textContent = target; return; }
+    if (reduceMotion() || target <= 0) { el.textContent = target.toLocaleString(); return; }
     el.textContent = '0';
     setTimeout(() => {
         const dur = 900, t0 = performance.now();
         const step = (now) => {
             if (el._countToken !== token) return;
             const p = Math.min(1, (now - t0) / dur);
-            el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3)));
+            el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3))).toLocaleString();
             if (p < 1) requestAnimationFrame(step);
         };
         requestAnimationFrame(step);
@@ -2330,23 +2374,26 @@ function loop(now) {
         game.fps = (game.fps == null) ? inst : (game.fps * 0.92 + inst * 0.08);
     }
 
-    if (game.state === 'loading') {
+    // 1) Advance game logic. Nothing in this block draws.
+    const versus = Versus.isActive();
+    if (versus) {
+        Versus.update(dt);
+    } else if (game.state === 'loading') {
         game.loadT += dt;
-        drawLoadingScreen();
     } else if (game.state === 'detonated') {
         // Hold DETONATED overlay for ~1s before standard game-over.
         game.detonateT -= dt;
-        draw(dt);
-        drawDetonatedOverlay();
-        if (game.detonateT <= 0) gameOver('DETONATED');
     } else if (game.state === 'actbreak') {
         updateActBreak(dt);
-        draw(dt);
-    } else {
-        if (game.state === 'playing') update(dt);
-        draw(dt);
-        if (game.bossState === 'warning') drawBossWarningOverlay();
+    } else if (game.state === 'playing') {
+        update(dt);
     }
+
+    // 2) Draw the frame. All drawing goes through this single entry point.
+    Renderer.frame(dt);
+
+    // 3) The detonated hold ends only after its final frame has been drawn.
+    if (!versus && game.state === 'detonated' && game.detonateT <= 0) gameOver('DETONATED');
     requestAnimationFrame(loop);
 }
 
@@ -2408,17 +2455,7 @@ function update(dt) {
             if (boss.regrowEnabled && boss.typed > 0 && boss.typed < boss.text.length
                 && boss.idleT >= boss.regrowIdleMs) {
                 // Idling too long → the most recently shattered letter regrows.
-                const li = boss.letters[boss.typed - 1];
-                if (li) {
-                    li.alive = true;
-                    li.shatterT = 0;
-                    li.regrowT = 280;
-                    boss.typed--;
-                    boss.idleT = 0;
-                    game.flash = Math.max(game.flash, 0.22); game.flashColor = '#FF8A00';
-                    game.shake = Math.max(game.shake, 5);
-                    renderInput();
-                }
+                regrowBossLetter(boss);
             }
             if (boss.timeLeft <= 0) {
                 bossEscaped(boss);
@@ -2571,59 +2608,59 @@ const SPLASH_TIPS = [
     'Red bomb words end the run if they land',
     'Gold bonus words grant instant power-ups',
     'Green twin words are linked — type both fast',
-    'A boss drops every 5 levels. Type it letter by letter',
+    'Bosses punish typos — a wrong key regrows a letter',
     'Backspace drops your lock so you can re-target',
     'Combos in Versus make your attacks fly faster',
 ];
 
 function drawLoadingScreen() {
     const ctx = game.ctx, w = game.w, h = game.h;
-    // Deep gradient backdrop, matching the menu's radial accents.
-    const grad = ctx.createRadialGradient(w / 2, h * 0.4, 0, w / 2, h * 0.4, Math.max(w, h) * 0.7);
-    grad.addColorStop(0, '#101430');
-    grad.addColorStop(1, '#0A0E1A');
+    // Deep backdrop matching the page background.
+    const grad = ctx.createRadialGradient(w / 2, 0, 0, w / 2, 0, Math.max(w, h) * 0.9);
+    grad.addColorStop(0, '#121a36');
+    grad.addColorStop(1, '#05070F');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
 
-    // Wordmark: letters drop in with a slight overshoot bounce, staggered.
+    // Wordmark: each letter rises and fades in, staggered. Widths are
+    // measured so the proportional display font keeps its natural spacing.
     const word = 'WORDFALL';
-    const size = Math.min(88, w / 9);
-    ctx.font = `400 ${size}px 'Monoton', Impact, sans-serif`;
-    ctx.textAlign = 'center';
+    const size = Math.round(Math.min(96, w / 7.5));
+    ctx.font = `800 ${size}px Sora, Inter, sans-serif`;
+    ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    const spacing = size * 0.82;
-    const totalW = spacing * (word.length - 1);
-    const baseX = w / 2 - totalW / 2;
-    const baseY = h / 2 - 30;
+    const tracking = -size * 0.035;
+    const widths = [...word].map(ch => ctx.measureText(ch).width);
+    const totalW = widths.reduce((a, b) => a + b, 0) + tracking * (word.length - 1);
+    let x = w / 2 - totalW / 2;
+    const baseY = h / 2 - 24;
+    const fall = ctx.createLinearGradient(x + widths.slice(0, 4).reduce((a, b) => a + b, 0), 0, x + totalW, 0);
+    fall.addColorStop(0, '#00F0FF');
+    fall.addColorStop(0.45, '#7A8CFF');
+    fall.addColorStop(1, '#FF2E97');
     for (let i = 0; i < word.length; i++) {
-        const t0 = 120 + i * 110;                    // per-letter start time
-        const p = Math.min(1, Math.max(0, (game.loadT - t0) / 420));
-        if (p <= 0) continue;
-        // easeOutBack for a small overshoot as each letter lands
-        const c = 1.70158;
-        const e = 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2);
-        const y = baseY - (1 - e) * 140;
-        const isFall = i >= 4;                       // FALL in magenta
-        const col = isFall ? '#FF2E97' : '#00F0FF';
-        ctx.globalAlpha = Math.min(1, p * 1.6);
-        ctx.fillStyle = col;
-        ctx.shadowColor = col;
-        ctx.shadowBlur = 22 * p;
-        ctx.fillText(word[i], baseX + i * spacing, y);
+        const t0 = 100 + i * 70;                       // per-letter start time
+        const p = Math.min(1, Math.max(0, (game.loadT - t0) / 520));
+        const e = 1 - Math.pow(1 - p, 3);              // easeOutCubic
+        if (p > 0) {
+            ctx.globalAlpha = e;
+            ctx.fillStyle = i >= 4 ? fall : '#F4F7FF';
+            ctx.fillText(word[i], x, baseY + (1 - e) * 26);
+        }
+        x += widths[i] + tracking;
     }
     ctx.globalAlpha = 1;
-    ctx.shadowBlur = 0;
 
     // Rotating tip (switches every 2.6s once the wordmark has landed).
-    if (game.loadT > 1100) {
+    if (game.loadT > 900) {
         const idx = Math.floor(game.loadT / 2600) % SPLASH_TIPS.length;
         const cyc = (game.loadT % 2600) / 2600;
-        // fade in/out at the edges of each tip's window
         const a = Math.min(1, cyc * 6, (1 - cyc) * 6);
-        ctx.globalAlpha = Math.max(0, a) * 0.9;
-        ctx.font = "400 15px Inter, sans-serif";
-        ctx.fillStyle = '#8fa0c8';
-        ctx.fillText('TIP  ·  ' + SPLASH_TIPS[idx], w / 2, h / 2 + 58);
+        ctx.globalAlpha = Math.max(0, a);
+        ctx.textAlign = 'center';
+        ctx.font = "500 14px Inter, sans-serif";
+        ctx.fillStyle = '#6B7499';
+        ctx.fillText(SPLASH_TIPS[idx], w / 2, baseY + size * 0.5 + 40);
         ctx.globalAlpha = 1;
     }
 }
@@ -2631,6 +2668,8 @@ function drawLoadingScreen() {
 function draw(dt) {
     const ctx = game.ctx;
     const w = game.w, h = game.h;
+    // With the 3D city behind us, this canvas is a transparent overlay.
+    if (Renderer.has3D()) ctx.clearRect(0, 0, w, h);
     ctx.save();
     const effShake = reduceMotion() ? 0 : game.shake;
     if (effShake > 0) {
@@ -2665,15 +2704,20 @@ function draw(dt) {
         ctx.fillRect(0, 0, w, h);
     }
 
-    drawDangerVignette(ctx, w, h);
-    drawBottomHud(ctx, w, h);
-    drawCannon(ctx, w, h);
-    drawTopHud(ctx, w, h);
+    // The menu and results screens are full UI over the 3D city, so the
+    // in-run HUD and typewriter only draw while a run is on screen.
+    const showHud = game.state !== 'menu' && game.state !== 'gameover';
+    if (showHud) {
+        drawDangerVignette(ctx, w, h);
+        drawBottomHud(ctx, w, h);
+        drawCannon(ctx, w, h);
+        drawTopHud(ctx, w, h);
 
-    if (game.mode === 'sprint' && game.state === 'playing') drawSprintTimer(ctx, w);
+        if (game.mode === 'sprint' && game.state === 'playing') drawSprintTimer(ctx, w);
 
-    // Step 4: touch overlays
-    drawStep4Overlays(ctx);
+        // Step 4: touch overlays
+        drawStep4Overlays(ctx);
+    }
     // Step 5: FPS counter
     if (Settings.values.showFPS) drawFPS(ctx);
 
@@ -2681,6 +2725,9 @@ function draw(dt) {
 }
 
 function drawBackground(ctx, w, h, dt) {
+    // The 3D city layer (bg3d.js) is the background when it's running;
+    // the 2D skyline below is the fallback when WebGL/the CDN isn't.
+    if (Renderer.has3D()) { drawReadabilityVeil(ctx, w, h); return; }
     const act = actConfig(game.act || 1);
     if (Assets.bgSkyline) {
         const img = Assets.bgSkyline;
@@ -2720,9 +2767,8 @@ function drawBackground(ctx, w, h, dt) {
         ctx.fillRect(0, 0, w, h);
     }
 
+    // Star drift is advanced in Renderer.tick(); this only draws them.
     for (const s of game.bgStars) {
-        s.y += 0.02 * s.z * dt * (game.freezeTimer > 0 ? 0.25 : 1);
-        if (s.y > h) { s.y = -2; s.x = Math.random() * w; }
         ctx.globalAlpha = 0.25;
         ctx.fillStyle = act.star;
         ctx.fillRect(s.x, s.y, s.r, s.r);
@@ -2730,7 +2776,26 @@ function drawBackground(ctx, w, h, dt) {
     ctx.globalAlpha = 1;
 }
 
-function cannonPos() { return { x: game.w / 2, y: game.h - 60 }; }
+// Over the 3D city, a soft edge vignette keeps the bright near-side
+// buildings from competing with words; the centre stays clear.
+let veilCache = null;
+function drawReadabilityVeil(ctx, w, h) {
+    if (!veilCache || veilCache.w !== w || veilCache.h !== h) {
+        const g = ctx.createRadialGradient(w / 2, h * 0.42, Math.min(w, h) * 0.18, w / 2, h * 0.42, Math.max(w, h) * 0.72);
+        g.addColorStop(0, 'rgba(5, 7, 15, 0)');
+        g.addColorStop(1, 'rgba(5, 7, 15, 0.5)');
+        veilCache = { w, h, g };
+    }
+    ctx.fillStyle = veilCache.g;
+    ctx.fillRect(0, 0, w, h);
+}
+
+function cannonPos() {
+    // On touch the keyboard covers the bottom, so the beam fires from just
+    // above the touch power-up row instead.
+    if (isTouchActive()) return { x: game.w / 2, y: game.h - BOTTOM_HUD_H - TOUCH_KB_H - TOUCH_PU_H };
+    return { x: game.w / 2, y: game.h - 60 };
+}
 function cannonFireScale() {
     if (game.fireT <= 0) return 1;
     const t = 1 - game.fireT / FIRE_ANIM_MS;
@@ -2739,6 +2804,8 @@ function cannonFireScale() {
 }
 
 function drawCannon(ctx, w, h) {
+    // The typewriter would sit on top of the touch keyboard's keys.
+    if (isTouchActive()) return;
     const { x: cx, y: cy } = cannonPos();
     const fireBoost = game.fireT > 0 ? 0.35 : 0;
     const baseAlpha = 0.45 + fireBoost;
@@ -3047,7 +3114,6 @@ function drawBossWord(ctx, boss) {
             glow = 36;
         }
         drawWordSegment(ctx, li.ch, x, y, col, glowCol, glow, false);
-        if (li.regrowT && li.regrowT > 0) li.regrowT = Math.max(0, li.regrowT - 16);
     }
     ctx.restore();
 }
@@ -3155,7 +3221,7 @@ function drawFloaters(ctx) {
             const age = f.max - f.life;
             scale = age < 180 ? 1.6 - 0.6 * (age / 180) : 1;
         }
-        ctx.font = `400 ${Math.round(f.size * 1.1 * scale)}px 'Monoton', Impact, sans-serif`;
+        ctx.font = `800 ${Math.round(f.size * 1.1 * scale)}px Sora, Inter, sans-serif`;
         ctx.textAlign = 'center';
         ctx.fillStyle = f.color;
         ctx.shadowColor = f.color;
@@ -3235,52 +3301,66 @@ function drawShieldAura(ctx, w, h) {
 
 // ---------- Canvas HUD ----------
 function drawTopHud(ctx, w, h) {
-    ctx.fillStyle = 'rgba(10, 14, 26, 0.75)';
-    ctx.fillRect(0, 0, w, TOP_HUD_H);
-    ctx.strokeStyle = 'rgba(0, 240, 255, 0.4)';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(0, TOP_HUD_H + 0.5); ctx.lineTo(w, TOP_HUD_H + 0.5); ctx.stroke();
+    // Soft fade from the top edge instead of a hard bar, plus a hairline.
+    const fade = ctx.createLinearGradient(0, 0, 0, TOP_HUD_H + 28);
+    fade.addColorStop(0, 'rgba(5, 7, 15, 0.88)');
+    fade.addColorStop(0.68, 'rgba(5, 7, 15, 0.6)');
+    fade.addColorStop(1, 'rgba(5, 7, 15, 0)');
+    ctx.fillStyle = fade;
+    ctx.fillRect(0, 0, w, TOP_HUD_H + 28);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.07)';
+    ctx.fillRect(0, TOP_HUD_H, w, 1);
 
-    const padX = 24;
-    const labelFont = "400 11px Inter, sans-serif";
-    const valueBigFont = "400 28px 'Monoton', Impact, sans-serif";
-    const valueFont    = "600 22px Inter, sans-serif";
-
+    // Narrow screens (phones) get a compact layout: no centred mode label
+    // and no WPM readout, so score / level / lives never overlap.
+    const narrow = w < 640;
+    const padX = narrow ? 16 : 28;
+    const labelFont = "600 10px Inter, sans-serif";
+    const valueFont = `700 ${narrow ? 22 : 26}px Sora, Inter, sans-serif`;
+    const setTracking = (v) => { if ('letterSpacing' in ctx) ctx.letterSpacing = v; };
+    const label = (txt, x, y) => {
+        ctx.font = labelFont; ctx.fillStyle = '#6B7499';
+        setTracking('1.6px'); ctx.fillText(txt, x, y); setTracking('0px');
+    };
+    const y = 22;
     ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
 
-    let x = padX, y = 22;
-    ctx.font = labelFont; ctx.fillStyle = '#6B7299';
-    ctx.textAlign = 'left'; ctx.fillText('SCORE', x, y);
-    ctx.font = valueBigFont; ctx.fillStyle = '#F0F4FF';
-    ctx.fillText(String(game.score), x, y + 28);
+    const scoreTxt = game.score.toLocaleString();
+    label('SCORE', padX, y);
+    ctx.font = valueFont; ctx.fillStyle = '#F4F7FF';
+    ctx.fillText(scoreTxt, padX, y + 27);
+    const levelX = padX + Math.max(narrow ? 76 : 140, ctx.measureText(scoreTxt).width + 28);
+    label('LEVEL', levelX, y);
+    ctx.font = valueFont; ctx.fillStyle = '#F4F7FF';
+    ctx.fillText(String(game.level), levelX, y + 27);
+    const levelEnd = levelX + Math.max(44, ctx.measureText(String(game.level)).width) + 16;
 
-    x = padX + 180;
-    ctx.font = labelFont; ctx.fillStyle = '#6B7299';
-    ctx.fillText('LEVEL', x, y);
-    ctx.font = valueBigFont; ctx.fillStyle = '#F0F4FF';
-    ctx.fillText(String(game.level), x, y + 28);
-
-    ctx.textAlign = 'center';
-    ctx.font = labelFont; ctx.fillStyle = '#6B7299';
-    ctx.fillText('MODE', w / 2, y);
-    ctx.font = "400 22px 'Monoton', Impact, sans-serif"; ctx.fillStyle = '#00F0FF';
-    ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 12;
-    ctx.fillText(game.mode.toUpperCase(), w / 2, y + 24);
-    ctx.shadowBlur = 0;
+    if (!narrow) {
+        ctx.textAlign = 'center';
+        label('MODE', w / 2, y);
+        ctx.font = "700 15px Sora, Inter, sans-serif"; ctx.fillStyle = '#00F0FF';
+        setTracking('2px');
+        ctx.fillText(game.mode.toUpperCase(), w / 2, y + 23);
+        setTracking('0px');
+    }
 
     ctx.textAlign = 'right';
-    // Right side: hearts OR boss progress bar
+    // Right side: hearts OR boss progress bar. Leave room for the touch
+    // pause button in the top-right corner.
+    const rightX = w - padX - (isTouchActive() ? 60 : 0);
     let rightConsumed = 0;
     if (game.bossState === 'fighting' && game.bossActive) {
-        rightConsumed = drawBossProgressBar(ctx, w - padX, 14);
+        rightConsumed = drawBossProgressBar(ctx, rightX, 14, levelEnd);
     } else {
-        rightConsumed = drawHearts(ctx, w - padX, 30);
+        rightConsumed = drawHearts(ctx, rightX, 30);
     }
-    const wpmRight = w - padX - rightConsumed - 24;
-    ctx.font = labelFont; ctx.fillStyle = '#6B7299';
-    ctx.fillText('WPM', wpmRight, y);
-    ctx.font = valueFont; ctx.fillStyle = '#F0F4FF';
-    ctx.fillText(String(currentWPM()), wpmRight, y + 26);
+    if (!narrow) {
+        const wpmRight = rightX - rightConsumed - 28;
+        label('WPM', wpmRight, y);
+        ctx.font = valueFont; ctx.fillStyle = '#F4F7FF';
+        ctx.fillText(String(currentWPM()), wpmRight, y + 27);
+    }
 }
 
 function drawHearts(ctx, rightX, centerY) {
@@ -3326,10 +3406,12 @@ function drawHeartPath(ctx, size) {
     ctx.closePath();
 }
 
-function drawBossProgressBar(ctx, rightX, topY) {
+function drawBossProgressBar(ctx, rightX, topY, leftLimit) {
     const boss = game.bossActive;
     const remaining = boss.text.length - boss.typed;
-    const barW = Math.round(game.w * 0.18);
+    // Wide enough that the seconds and "BOSS · N LEFT" labels never overlap,
+    // but never reaching back over the LEVEL readout on very narrow phones.
+    const barW = Math.min(Math.max(150, Math.round(game.w * 0.18)), rightX - leftLimit);
     const x = rightX - barW;
     const t = performance.now();
 
@@ -3376,7 +3458,7 @@ function drawBossProgressBar(ctx, rightX, topY) {
     ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#F0F4FF';
-    ctx.fillText(`BOSS · ${remaining} LEFT`, rightX, y + tH + 3);
+    ctx.fillText(barW < 150 ? `${remaining} LEFT` : `BOSS · ${remaining} LEFT`, rightX, y + tH + 3);
     // seconds, colour-coded, on the left of the same line
     ctx.textAlign = 'left';
     ctx.fillStyle = timerCol;
@@ -3388,13 +3470,20 @@ function drawBossProgressBar(ctx, rightX, topY) {
 
 function drawBottomHud(ctx, w, h) {
     const top = h - BOTTOM_HUD_H;
-    ctx.fillStyle = 'rgba(10, 14, 26, 0.75)';
-    ctx.fillRect(0, top, w, BOTTOM_HUD_H);
-    ctx.strokeStyle = 'rgba(0, 240, 255, 0.4)';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(0, top + 0.5); ctx.lineTo(w, top + 0.5); ctx.stroke();
+    // Soft fade up from the bottom edge, matching the top HUD.
+    const fade = ctx.createLinearGradient(0, top - 28, 0, h);
+    fade.addColorStop(0, 'rgba(5, 7, 15, 0)');
+    fade.addColorStop(0.3, 'rgba(5, 7, 15, 0.62)');
+    fade.addColorStop(1, 'rgba(5, 7, 15, 0.9)');
+    ctx.fillStyle = fade;
+    ctx.fillRect(0, top - 28, w, BOTTOM_HUD_H + 28);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.07)';
+    ctx.fillRect(0, top, w, 1);
 
-    drawPowerupSlots(ctx, 24, top + 17, w);
+    // Touch has its own power-up row above the keyboard; these ⇧F/⇧B/⇧S
+    // slots are keyboard shortcuts.
+    if (!isTouchActive()) drawPowerupSlots(ctx, 24, top + 17, w);
+    else game.powerupRects.length = 0;
     drawComboReadout(ctx, w - 24, top + 22);
 }
 
@@ -3435,7 +3524,7 @@ function drawPowerupSlots(ctx, x0, y0, totalW) {
             ctx.drawImage(iconAsset, x + (sz - iSz) / 2, y + (sz - iSz) / 2, iSz, iSz);
             ctx.globalAlpha = 1;
         } else {
-            ctx.font = "400 26px 'Monoton', Impact, sans-serif";
+            ctx.font = "800 26px Sora, Inter, sans-serif";
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillStyle = has ? '#00F0FF' : 'rgba(240, 244, 255, 0.2)';
@@ -3474,7 +3563,7 @@ function drawComboReadout(ctx, rightX, y0) {
     ctx.fillStyle = '#6B7299';
     ctx.fillText('COMBO  ·  MULT', rightX, y0);
 
-    ctx.font = "400 28px 'Monoton', Impact, sans-serif";
+    ctx.font = "800 28px Sora, Inter, sans-serif";
     ctx.fillStyle = '#00F0FF';
     ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 14;
     ctx.fillText(`${game.combo}x`, rightX - 110, y0 + 28);
@@ -3500,7 +3589,7 @@ function drawComboReadout(ctx, rightX, y0) {
 
 function drawSprintTimer(ctx, w) {
     const t = Math.max(0, game.sprintTimeLeft) / 1000;
-    ctx.font = `400 36px 'Monoton', Impact, sans-serif`;
+    ctx.font = `800 36px Sora, Inter, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = t < 10 ? '#FF1744' : '#F0F4FF';
@@ -3546,7 +3635,11 @@ function drawBossWarningOverlay() {
     ctx.globalAlpha = 1;
 
     // BOSS INCOMING text
-    ctx.font = "400 64px 'Monoton', Impact, sans-serif";
+    ctx.font = "800 64px Sora, Inter, sans-serif";
+    const bannerW = ctx.measureText('BOSS INCOMING').width;
+    if (bannerW > w - 32) {
+        ctx.font = `800 ${Math.floor(64 * (w - 32) / bannerW)}px Sora, Inter, sans-serif`;
+    }
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const pulse = 0.85 + 0.15 * (0.5 + 0.5 * Math.sin(t * 0.012));
@@ -3564,7 +3657,7 @@ function drawDetonatedOverlay() {
     ctx.save();
     ctx.fillStyle = 'rgba(255, 23, 68, 0.45)';
     ctx.fillRect(0, 0, w, h);
-    ctx.font = "400 96px 'Monoton', Impact, sans-serif";
+    ctx.font = "800 96px Sora, Inter, sans-serif";
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#FF1744';
@@ -3653,7 +3746,7 @@ function generateShareCard(stats) {
         const aspect = Assets.logo.height / Assets.logo.width;
         ctx.drawImage(Assets.logo, LOGO_PAD, LOGO_PAD, lw, lw * aspect);
     } else {
-        ctx.font = "400 56px 'Monoton', Impact, sans-serif";
+        ctx.font = "800 56px Sora, Inter, sans-serif";
         ctx.textAlign = 'left'; ctx.textBaseline = 'top';
         ctx.fillStyle = '#00F0FF';
         ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 18;
@@ -3690,7 +3783,7 @@ function generateShareCard(stats) {
 
     // Big score number with magenta drop-shadow
     const scoreStr = String(stats.score);
-    ctx.font = "400 140px 'Monoton', Impact, sans-serif";
+    ctx.font = "800 140px Sora, Inter, sans-serif";
     // shadow pass
     ctx.fillStyle = '#FF2E97';
     ctx.fillText(scoreStr, W / 2 + 4, 360 + 4);
@@ -3725,10 +3818,10 @@ function generateShareCard(stats) {
         // value
         ctx.fillStyle = '#00F0FF';
         if (p.big) {
-            ctx.font = "400 48px 'Monoton', Impact, sans-serif";
+            ctx.font = "800 48px Sora, Inter, sans-serif";
             ctx.fillText(p.value, px + plateW / 2, pY + 86);
         } else {
-            ctx.font = "400 36px 'Monoton', Impact, sans-serif";
+            ctx.font = "800 36px Sora, Inter, sans-serif";
             const val = fitText(ctx, p.value, plateW - 20);
             ctx.fillText(val, px + plateW / 2, pY + 86);
         }
@@ -3936,7 +4029,7 @@ function stopDailyCountdownTick() {
 }
 
 function showDailyPlayedModal(result) {
-    document.getElementById('dp-score').textContent = result.score;
+    document.getElementById('dp-score').textContent = (result.score || 0).toLocaleString();
     document.getElementById('dp-wpm').textContent   = result.wpm   || 0;
     document.getElementById('dp-combo').textContent = result.combo || 0;
     document.getElementById('dp-countdown').textContent = formatHMS(msUntilNextUTCMidnight());
@@ -3967,7 +4060,7 @@ function populateStatsModal() {
         ['Best — Daily',          lifetime.bestScoreDaily],
     ];
     list.innerHTML = rows.map(([k, v]) =>
-        `<div class="row"><span class="k">${escapeHtml(k)}</span><span class="v">${escapeHtml(v)}</span></div>`
+        `<div class="row"><span class="k">${escapeHtml(k)}</span><span class="v">${escapeHtml(typeof v === 'number' ? v.toLocaleString() : v)}</span></div>`
     ).join('');
     const grid = document.getElementById('ach-grid');
     grid.innerHTML = ACHIEVEMENTS.map(a => {
@@ -4036,16 +4129,15 @@ function drawTouchKeyboard(ctx) {
         const dy = k.y + (1 - sc) * k.h / 2;
         const dw = k.w * sc, dh = k.h * sc;
         ctx.save();
-        ctx.fillStyle = press ? 'rgba(0, 240, 255, 0.3)' : 'rgba(0, 0, 0, 0.6)';
-        ctx.strokeStyle = 'rgba(0, 240, 255, 0.4)';
+        ctx.fillStyle = press ? 'rgba(0, 240, 255, 0.28)' : 'rgba(11, 15, 30, 0.72)';
+        ctx.strokeStyle = press ? 'rgba(0, 240, 255, 0.7)' : 'rgba(255, 255, 255, 0.12)';
         ctx.lineWidth = 1;
-        roundRect(ctx, dx, dy, dw, dh, 6);
+        roundRect(ctx, dx, dy, dw, dh, 8);
         ctx.fill(); ctx.stroke();
-        ctx.font = '400 22px VT323, monospace';
+        ctx.font = '600 17px Inter, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#F0F4FF';
-        ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 6;
+        ctx.fillStyle = '#F4F7FF';
         if (k.ch === 'BACKSPACE') {
             ctx.fillText('⌫', dx + dw / 2, dy + dh / 2 + 1);
         } else {
@@ -4053,7 +4145,6 @@ function drawTouchKeyboard(ctx) {
         }
         ctx.shadowBlur = 0;
         ctx.restore();
-        if (k.flashT > 0) k.flashT = Math.max(0, k.flashT - 16);
     }
 }
 
@@ -4098,7 +4189,7 @@ function drawTouchPowerups(ctx) {
             ctx.drawImage(asset, x + (size - iSz) / 2, y + (size - iSz) / 2, iSz, iSz);
             ctx.globalAlpha = 1;
         } else {
-            ctx.font = "400 28px 'Monoton', Impact, sans-serif";
+            ctx.font = "800 28px Sora, Inter, sans-serif";
             ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
             ctx.fillStyle = has ? '#00F0FF' : 'rgba(240, 244, 255, 0.3)';
             const letter = ({ freeze: 'F', bomb: 'B', shield: 'S' })[kind];
@@ -4123,15 +4214,15 @@ function drawTouchPauseButton(ctx) {
     const y = margin;
     game.pauseBtnRect = { x, y, w: size, h: size };
     ctx.save();
-    ctx.fillStyle = 'rgba(10, 14, 26, 0.7)';
-    ctx.strokeStyle = '#00F0FF';
-    ctx.lineWidth = 1.5;
-    roundRect(ctx, x, y, size, size, 8);
+    ctx.fillStyle = 'rgba(11, 15, 30, 0.6)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(x + size / 2, y + size / 2, size / 2 - 2, 0, Math.PI * 2);
     ctx.fill(); ctx.stroke();
-    ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 8;
-    ctx.fillStyle = '#00F0FF';
-    ctx.fillRect(x + 14, y + 12, 6, size - 24);
-    ctx.fillRect(x + 28, y + 12, 6, size - 24);
+    ctx.fillStyle = '#F4F7FF';
+    roundRect(ctx, x + 17, y + 15, 5, size - 30, 2); ctx.fill();
+    roundRect(ctx, x + 26, y + 15, 5, size - 30, 2); ctx.fill();
     ctx.restore();
 }
 
@@ -4308,6 +4399,109 @@ function drawFPS(ctx) {
     ctx.restore();
 }
 
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  MODULE: Renderer — the one entry point for all drawing     ║
+// ╚══════════════════════════════════════════════════════════════╝
+// loop() advances game logic, then calls Renderer.frame(dt) once per
+// frame. Everything that reaches the screen goes through here, so visual
+// layers can be added or swapped without touching gameplay code.
+const Renderer = {
+    // Cosmetic-only animation (never read by gameplay). Runs only on
+    // frames where the main scene is drawn, exactly as it did when this
+    // lived inside the draw functions.
+    tick(dt) {
+        const w = game.w, h = game.h;
+        const starSpeed = game.freezeTimer > 0 ? 0.25 : 1;
+        for (const s of game.bgStars) {
+            s.y += 0.02 * s.z * dt * starSpeed;
+            if (s.y > h) { s.y = -2; s.x = Math.random() * w; }
+        }
+        for (const word of game.words) {
+            if (word.type !== 'boss') continue;
+            for (const li of word.letters) {
+                if (li.alive && li.regrowT && li.regrowT > 0) li.regrowT = Math.max(0, li.regrowT - 16);
+            }
+        }
+        if (isTouchActive()) {
+            for (const k of game.touchKeys) {
+                if (k.flashT > 0) k.flashT = Math.max(0, k.flashT - 16);
+            }
+        }
+    },
+
+    // 3D background layer (bg3d.js). Optional: everything falls back to the
+    // 2D skyline when WebGL or the CDN is unavailable.
+    has3D() {
+        const bg = window.WordfallBG3D;
+        return !!bg && bg.ready === true;
+    },
+    init3D() {
+        const bg = window.WordfallBG3D;
+        if (bg && typeof bg.init === 'function') bg.init({ quality: Settings.values.graphics });
+    },
+    setGraphics(q) {
+        const bg = window.WordfallBG3D;
+        if (bg && typeof bg.setQuality === 'function') bg.setQuality(q);
+    },
+    resize3D() {
+        const bg = window.WordfallBG3D;
+        if (bg && typeof bg.resize === 'function') bg.resize(game.w, game.h);
+    },
+    // Gameplay events are detected by comparing read-only counters with
+    // last frame's values, so no gameplay code needs to call into here.
+    _seen: null,
+    watchEvents(state) {
+        const vs = state === 'versus' ? Versus.snapshot() : null;
+        const now = {
+            mode: vs ? 'versus' : 'solo',
+            lives: vs ? vs.youLives : game.lives,
+            words: vs ? vs.youWords : game.wordsCompleted,
+            detonated: state === 'detonated',
+        };
+        const was = this._seen;
+        this._seen = now;
+        const events = [];
+        if (!was || was.mode !== now.mode) return events;
+        if (now.lives < was.lives) events.push('lifeLost');
+        if (now.detonated && !was.detonated) events.push('detonated');
+        if (now.words > was.words) events.push('wordDestroyed');
+        return events;
+    },
+
+    // Read-only snapshot of what the 3D layer should show this frame.
+    frame3D(dt, state) {
+        const events = this.watchEvents(state);
+        if (!this.has3D()) return;
+        const bg = window.WordfallBG3D;
+        for (const e of events) bg.event(e);
+        bg.frame(dt, {
+            state,
+            hue: actConfig(game.act || 1).hue,
+            freeze: state !== 'versus' && game.freezeTimer > 0,
+            boss: state !== 'versus' && game.bossState !== 'none',
+            reduceMotion: reduceMotion(),
+            // Menu and results get the slow, high cinematic camera; on wide
+            // screens the menu column sits left, so frame the city right.
+            cinematic: state === 'menu' || state === 'gameover',
+            menuShift: state === 'menu' && game.w > 900,
+        });
+    },
+
+    frame(dt) {
+        if (Versus.isActive()) {
+            this.frame3D(dt, 'versus');
+            Versus.draw(game.ctx);
+            return;
+        }
+        if (game.state === 'loading') { drawLoadingScreen(); return; }
+        this.tick(dt);
+        this.frame3D(dt, game.state);
+        draw(dt);
+        if (game.state === 'detonated') drawDetonatedOverlay();
+        else if (game.state !== 'actbreak' && game.bossState === 'warning') drawBossWarningOverlay();
+    },
+};
+
 // ====================================================================
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  MODULE: Settings — User preferences persistence           ║
@@ -4325,6 +4519,9 @@ const Settings = (() => {
         reduceMotion: false,
         showFPS: false,
         colorblind: false,
+        // 3D background quality. Low = no bloom, no rain, half the
+        // buildings. Phones/tablets start on Low.
+        graphics: IS_TOUCH ? 'low' : 'high',
     };
     const values = { ...defaults };
 
@@ -4383,7 +4580,7 @@ const Tutorial = (() => {
         },
         {
             title: 'WATCH FOR DANGER',
-            body: 'Red bombs end the run instantly. Gold bonuses grant power-ups. Green twins are linked — type both quickly. Every 5 levels: BOSS.',
+            body: 'Red bombs end the run instantly. Gold bonuses grant power-ups. Green twins are linked — type both quickly. Every 5 levels a BOSS hits: beat the clock, and don\'t typo — mistakes regrow letters.',
             draw: drawDemoWordTypes,
         },
     ];
@@ -4503,7 +4700,7 @@ const Tutorial = (() => {
     function drawDemoCombo(ctx, w, h, t) {
         const phase = (t / 1500) % 1;
         const combo = Math.floor(phase * 27);
-        ctx.font = "400 64px 'Monoton', Impact, sans-serif";
+        ctx.font = "800 64px Sora, Inter, sans-serif";
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillStyle = '#00F0FF';
         ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 18;
@@ -4546,7 +4743,7 @@ const Tutorial = (() => {
             ctx.beginPath();
             ctx.arc(x + sz / 2, y0 + sz / 2, sz / 2, 0, Math.PI * 2);
             ctx.fill(); ctx.stroke();
-            ctx.font = "400 32px 'Monoton', Impact, sans-serif";
+            ctx.font = "800 32px Sora, Inter, sans-serif";
             ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
             ctx.fillStyle = '#00F0FF';
             ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 10;
@@ -4724,7 +4921,9 @@ function wireStep5DOM() {
     guard('settings-gear', () => {
         const gearBtn = document.getElementById('settings-btn');
         if (!gearBtn) return;
-        if (Assets.iconSettings) {
+        // The redesigned menu ships an inline SVG gear; only fall back to
+        // the PNG icon if the button has no icon of its own.
+        if (Assets.iconSettings && !gearBtn.querySelector('svg')) {
             gearBtn.innerHTML = '';
             const img = document.createElement('img');
             img.src = Assets.iconSettings.src;
@@ -4813,6 +5012,25 @@ function wireStep5DOM() {
         bindToggle('reduce-motion', 'reduceMotion');
         bindToggle('show-fps',      'showFPS');
         bindToggle('colorblind',    'colorblind');
+    });
+
+    guard('graphics', () => {
+        const btns = document.querySelectorAll('#gfx-seg [data-gfx]');
+        const sync = () => btns.forEach(b => {
+            const on = b.dataset.gfx === Settings.values.graphics;
+            b.classList.toggle('on', on);
+            b.setAttribute('aria-checked', on ? 'true' : 'false');
+        });
+        btns.forEach(b => b.addEventListener('click', () => {
+            Settings.set('graphics', b.dataset.gfx);
+            Renderer.setGraphics(b.dataset.gfx);
+            sync();
+        }));
+        sync();
+        // Tell the player when their browser can't show the 3D city.
+        const note = document.getElementById('gfx-note');
+        const bg = window.WordfallBG3D;
+        if (note && bg && bg._initing) bg._initing.then((ok) => { if (!ok) note.hidden = false; });
     });
 
     guard('reset-stats', () => {
@@ -5491,10 +5709,15 @@ const Versus = (() => {
     function draw(ctx) {
         if (!state.active) return;
         const w = game.w, h = game.h;
+        if (Renderer.has3D()) ctx.clearRect(0, 0, w, h);
         ctx.save();
         if (state.shake > 0) ctx.translate((Math.random() - 0.5) * state.shake, (Math.random() - 0.5) * state.shake);
 
-        if (Assets.bgSkyline) {
+        if (Renderer.has3D()) {
+            // 3D city shows through; a light veil keeps both lanes readable.
+            ctx.fillStyle = 'rgba(10, 14, 26, 0.3)';
+            ctx.fillRect(0, 0, w, h);
+        } else if (Assets.bgSkyline) {
             const img = Assets.bgSkyline;
             const ir = img.width / img.height, cr = w / h;
             let dw, dh, dx, dy;
@@ -5642,13 +5865,18 @@ const Versus = (() => {
 
     function drawVsHud(ctx) {
         const w = game.w;
-        ctx.fillStyle = 'rgba(10, 14, 26, 0.75)';
-        ctx.fillRect(0, 0, w, 56);
-        ctx.strokeStyle = 'rgba(0, 240, 255, 0.35)';
-        ctx.beginPath(); ctx.moveTo(0, 56.5); ctx.lineTo(w, 56.5); ctx.stroke();
+        // Same soft fade + hairline as the single-player HUD.
+        const fade = ctx.createLinearGradient(0, 0, 0, 84);
+        fade.addColorStop(0, 'rgba(5, 7, 15, 0.88)');
+        fade.addColorStop(0.66, 'rgba(5, 7, 15, 0.6)');
+        fade.addColorStop(1, 'rgba(5, 7, 15, 0)');
+        ctx.fillStyle = fade;
+        ctx.fillRect(0, 0, w, 84);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.07)';
+        ctx.fillRect(0, 56, w, 1);
 
-        ctx.font = "400 12px Inter, sans-serif";
-        ctx.fillStyle = '#6B7299'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+        ctx.font = "600 11px Inter, sans-serif";
+        ctx.fillStyle = '#6B7499'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
         ctx.fillText('YOU', 22, 22);
         drawHearts(ctx, state.you, 22, 32);
 
@@ -5658,11 +5886,11 @@ const Versus = (() => {
         drawHearts(ctx, state.cpu, w - 22, 32);
 
         ctx.textAlign = 'center';
-        ctx.font = "400 18px 'Monoton', Impact, sans-serif";
-        ctx.fillStyle = '#00F0FF';
-        ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 8;
-        ctx.fillText('VERSUS', w / 2, 26);
-        ctx.shadowBlur = 0;
+        ctx.font = "700 15px Sora, Inter, sans-serif";
+        ctx.fillStyle = '#F4F7FF';
+        if ('letterSpacing' in ctx) ctx.letterSpacing = '3px';
+        ctx.fillText('VERSUS', w / 2, 34);
+        if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
 
         if (state.you.target || state.you.rackTarget != null) {
             ctx.font = '400 22px VT323, monospace';
@@ -5794,7 +6022,7 @@ const Versus = (() => {
         const t = performance.now();
         const pulse = 0.7 + 0.3 * (0.5 + 0.5 * Math.sin(t * 0.01));
         const winYou = state.winner === 'you';
-        ctx.font = "400 96px 'Monoton', Impact, sans-serif";
+        ctx.font = "800 96px Sora, Inter, sans-serif";
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillStyle = winYou ? '#00FF9F' : '#FF1744';
         ctx.shadowColor = ctx.fillStyle;
@@ -5824,6 +6052,10 @@ const Versus = (() => {
 
     function openPicker() { show('versus-setup'); }
     function isActive() { return state.active; }
+    // Read-only numbers for the visual layer (camera shake, bloom pulse).
+    function snapshot() {
+        return { youLives: state.you ? state.you.lives : 0, youWords: state.you ? state.you.wordsTyped : 0 };
+    }
     function quitToMenu() {
         state.active = false;
         state.words = []; state.particles = []; state.floaters = [];
@@ -5831,7 +6063,7 @@ const Versus = (() => {
         toMenu();
     }
 
-    return { TIERS, openPicker, start, update, draw, onKey, isActive, quitToMenu };
+    return { TIERS, openPicker, start, update, draw, onKey, isActive, snapshot, quitToMenu };
 })();
 
 // Route keystrokes to Versus when active (before single-player input).
@@ -5842,24 +6074,6 @@ const Versus = (() => {
             if (Versus.onKey(e)) return;
         }
         return origOnKey.call(this, e);
-    };
-})();
-
-// Patch the main render loop to drive Versus when active.
-(function wireVersusLoop() {
-    const origLoop = loop;
-    loop = function (now) {
-        if (Versus.isActive()) {
-            const dt = Math.min(64, now - (game.last || now));
-            game.last = now;
-            if (game.fps == null) game.fps = 60;
-            else game.fps = game.fps * 0.92 + (1000 / Math.max(1, dt)) * 0.08;
-            Versus.update(dt);
-            Versus.draw(game.ctx);
-            requestAnimationFrame(loop);
-            return;
-        }
-        origLoop(now);
     };
 })();
 
