@@ -37,6 +37,9 @@
     let THREE, canvas, renderer, scene, camera, composer, bloomPass;
     let buildingMat, groundMat, rainMat, backdropMat, backdrop;
     let scroll = 0, time = 0, speed = BASE_SPEED;
+    // Graphics setting. Low = no bloom, no rain, half the buildings.
+    const CITY_COUNT = 160;
+    let quality = 'high';
     // Event reactions (all decay back to rest on their own).
     let shake = 0;             // camera shake amplitude
     let pulse = 0;             // bloom / glow pulse
@@ -418,7 +421,7 @@
         ground.position.set(0, 0, NEAR - LEN / 2);
         scene.add(ground);
 
-        BG.city = buildCity(160);
+        BG.city = buildCity(CITY_COUNT);
         scene.add(BG.city);
         BG.rain = buildRain(1600);
         scene.add(BG.rain);
@@ -428,6 +431,7 @@
         bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(256, 256), BLOOM_BASE, 0.55, 0.2);
         composer.addPass(bloomPass);
 
+        applyQuality();
         resize(window.innerWidth, window.innerHeight);
 
         canvas.addEventListener('webglcontextlost', (e) => {
@@ -451,10 +455,18 @@
         backdrop.position.set(0, CAM_Y - dist * (CAM_Y - LOOK_Y) / 100 + ph * 0.12, -dist);
     }
 
+    function applyQuality() {
+        const high = quality === 'high';
+        BG.city.count = high ? CITY_COUNT : CITY_COUNT / 2;
+        BG.rain.visible = high;
+        bloomPass.enabled = high;
+        if (viewW) resize(viewW, viewH);
+    }
+
     function resize(w, h) {
         if (!renderer) return;
         viewW = w; viewH = h;
-        const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+        const dpr = Math.min(window.devicePixelRatio || 1, quality === 'high' ? 1.25 : 1);
         renderer.setPixelRatio(dpr);
         renderer.setSize(w, h, false);
         composer.setPixelRatio(dpr);
@@ -465,15 +477,25 @@
     }
 
     // ---------- Public API ----------
-    BG.init = function () {
+    BG.setQuality = function (q) {
+        quality = q === 'low' ? 'low' : 'high';
+        if (renderer) applyQuality();
+    };
+
+    BG.init = function (opts) {
+        if (opts && opts.quality) quality = opts.quality === 'low' ? 'low' : 'high';
         if (BG.ready || BG._initing) return BG._initing || Promise.resolve(BG.ready);
-        if (!webglAvailable()) { BG.failed = true; return Promise.resolve(false); }
+        if (!webglAvailable()) {
+            BG.failed = true;
+            BG._initing = Promise.resolve(false);
+            return BG._initing;
+        }
         BG._initing = loadScript(THREE_URL)
             .then(() => loadScript(POSTFX_URL))
             .then(() => {
                 build();
                 // Render one frame before revealing so the fade-in isn't black.
-                composer.render();
+                render(0);
                 BG.ready = true;
                 canvas.classList.add('on');
                 return true;
@@ -529,8 +551,10 @@
         // Word destroyed: a quick swell of glow that fades in ~0.3s.
         pulse *= Math.exp(-dt * 7);
         bloomPass.strength = BLOOM_BASE + pulse * 0.9;
-        buildingMat.uniforms.uGlow.value = 1 + pulse * 0.35;
-        groundMat.uniforms.uGlow.value = 1 + pulse * 0.5;
+        // Low has no bloom, so its neon runs a little hotter to compensate.
+        const glow = quality === 'high' ? 1 : 1.2;
+        buildingMat.uniforms.uGlow.value = glow + pulse * 0.35;
+        groundMat.uniforms.uGlow.value = glow + pulse * 0.5;
 
         buildingMat.uniforms.uScroll.value = scroll;
         buildingMat.uniforms.uTime.value = time;
@@ -550,6 +574,12 @@
         camera.lookAt(camera.position.x * 0.4, LOOK_Y, -100);
         camera.rotation.z += Math.sin(time * 0.1) * 0.012 * drift + (Math.random() - 0.5) * shake * 0.03;
 
-        composer.render(dt);
+        render(dt);
     };
+
+    // High goes through the bloom composer; Low draws straight to screen.
+    function render(dt) {
+        if (quality === 'high') composer.render(dt);
+        else renderer.render(scene, camera);
+    }
 })();

@@ -31,7 +31,9 @@ const [VW, VH] = (process.argv[4] || '1366x768').split('x').map(Number);
         executablePath: process.env.PW_CHROMIUM || undefined,
         args: ['--autoplay-policy=no-user-gesture-required', '--enable-unsafe-swiftshader'],
     });
-    const page = await browser.newPage({ viewport: { width: VW, height: VH } });
+    // Service workers fetch on their own and would bypass the THREE_JS route.
+    const page = await browser.newPage({ viewport: { width: VW, height: VH },
+        serviceWorkers: process.env.THREE_JS ? 'block' : 'allow' });
     const errors = [];
     page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
     page.on('console', (m) => {

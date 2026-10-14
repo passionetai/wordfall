@@ -4367,7 +4367,11 @@ const Renderer = {
     },
     init3D() {
         const bg = window.WordfallBG3D;
-        if (bg && typeof bg.init === 'function') bg.init();
+        if (bg && typeof bg.init === 'function') bg.init({ quality: Settings.values.graphics });
+    },
+    setGraphics(q) {
+        const bg = window.WordfallBG3D;
+        if (bg && typeof bg.setQuality === 'function') bg.setQuality(q);
     },
     resize3D() {
         const bg = window.WordfallBG3D;
@@ -4441,6 +4445,9 @@ const Settings = (() => {
         reduceMotion: false,
         showFPS: false,
         colorblind: false,
+        // 3D background quality. Low = no bloom, no rain, half the
+        // buildings. Phones/tablets start on Low.
+        graphics: IS_TOUCH ? 'low' : 'high',
     };
     const values = { ...defaults };
 
@@ -4929,6 +4936,25 @@ function wireStep5DOM() {
         bindToggle('reduce-motion', 'reduceMotion');
         bindToggle('show-fps',      'showFPS');
         bindToggle('colorblind',    'colorblind');
+    });
+
+    guard('graphics', () => {
+        const btns = document.querySelectorAll('#gfx-seg [data-gfx]');
+        const sync = () => btns.forEach(b => {
+            const on = b.dataset.gfx === Settings.values.graphics;
+            b.classList.toggle('on', on);
+            b.setAttribute('aria-checked', on ? 'true' : 'false');
+        });
+        btns.forEach(b => b.addEventListener('click', () => {
+            Settings.set('graphics', b.dataset.gfx);
+            Renderer.setGraphics(b.dataset.gfx);
+            sync();
+        }));
+        sync();
+        // Tell the player when their browser can't show the 3D city.
+        const note = document.getElementById('gfx-note');
+        const bg = window.WordfallBG3D;
+        if (note && bg && bg._initing) bg._initing.then((ok) => { if (!ok) note.hidden = false; });
     });
 
     guard('reset-stats', () => {

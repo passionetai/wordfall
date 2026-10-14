@@ -309,6 +309,14 @@
                 <label for="colorblind">Colorblind Mode</label>
                 <label class="switch"><input type="checkbox" id="colorblind"><span class="slot"></span></label>
             </div>
+            <div class="setting-row toggle">
+                <label id="gfx-label">Graphics</label>
+                <div class="seg" id="gfx-seg" role="radiogroup" aria-labelledby="gfx-label">
+                    <button type="button" role="radio" data-gfx="high">High</button>
+                    <button type="button" role="radio" data-gfx="low">Low</button>
+                </div>
+            </div>
+            <p class="gfx-note" id="gfx-note" hidden>3D city isn't available in this browser — using the classic background.</p>
 
             <hr class="settings-divider">
             <div class="setting-row">
