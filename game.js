@@ -1564,9 +1564,16 @@ function spawnBoss() {
     game.words = game.words.filter(w => w.type === 'boss');
     const text = pickBossText();
     const sizeBase = fontSizeForText(text); // VT323 sized for length already
-    const size = Math.round(sizeBase * bossSizeMultiplierForLevel(game.level));
+    let size = Math.round(sizeBase * bossSizeMultiplierForLevel(game.level));
     game.ctx.font = `400 ${size}px 'VT323', monospace`;
-    const totalWidth = game.ctx.measureText(text).width;
+    let totalWidth = game.ctx.measureText(text).width;
+    // Long boss words at big sizes overflow a phone-width screen; shrink to fit.
+    const maxWidth = game.w - 32;
+    if (totalWidth > maxWidth) {
+        size = Math.floor(size * maxWidth / totalWidth);
+        game.ctx.font = `400 ${size}px 'VT323', monospace`;
+        totalWidth = game.ctx.measureText(text).width;
+    }
     // Per-letter positions (so typed letters don't reflow remaining ones).
     const letters = [];
     let xCursor = 0;
@@ -2783,7 +2790,12 @@ function drawReadabilityVeil(ctx, w, h) {
     ctx.fillRect(0, 0, w, h);
 }
 
-function cannonPos() { return { x: game.w / 2, y: game.h - 60 }; }
+function cannonPos() {
+    // On touch the keyboard covers the bottom, so the beam fires from just
+    // above the touch power-up row instead.
+    if (isTouchActive()) return { x: game.w / 2, y: game.h - BOTTOM_HUD_H - TOUCH_KB_H - TOUCH_PU_H };
+    return { x: game.w / 2, y: game.h - 60 };
+}
 function cannonFireScale() {
     if (game.fireT <= 0) return 1;
     const t = 1 - game.fireT / FIRE_ANIM_MS;
@@ -2792,6 +2804,8 @@ function cannonFireScale() {
 }
 
 function drawCannon(ctx, w, h) {
+    // The typewriter would sit on top of the touch keyboard's keys.
+    if (isTouchActive()) return;
     const { x: cx, y: cy } = cannonPos();
     const fireBoost = game.fireT > 0 ? 0.35 : 0;
     const baseAlpha = 0.45 + fireBoost;
@@ -3320,6 +3334,7 @@ function drawTopHud(ctx, w, h) {
     label('LEVEL', levelX, y);
     ctx.font = valueFont; ctx.fillStyle = '#F4F7FF';
     ctx.fillText(String(game.level), levelX, y + 27);
+    const levelEnd = levelX + Math.max(44, ctx.measureText(String(game.level)).width) + 16;
 
     if (!narrow) {
         ctx.textAlign = 'center';
@@ -3336,7 +3351,7 @@ function drawTopHud(ctx, w, h) {
     const rightX = w - padX - (isTouchActive() ? 60 : 0);
     let rightConsumed = 0;
     if (game.bossState === 'fighting' && game.bossActive) {
-        rightConsumed = drawBossProgressBar(ctx, rightX, 14);
+        rightConsumed = drawBossProgressBar(ctx, rightX, 14, levelEnd);
     } else {
         rightConsumed = drawHearts(ctx, rightX, 30);
     }
@@ -3391,10 +3406,12 @@ function drawHeartPath(ctx, size) {
     ctx.closePath();
 }
 
-function drawBossProgressBar(ctx, rightX, topY) {
+function drawBossProgressBar(ctx, rightX, topY, leftLimit) {
     const boss = game.bossActive;
     const remaining = boss.text.length - boss.typed;
-    const barW = Math.round(game.w * 0.18);
+    // Wide enough that the seconds and "BOSS · N LEFT" labels never overlap,
+    // but never reaching back over the LEVEL readout on very narrow phones.
+    const barW = Math.min(Math.max(150, Math.round(game.w * 0.18)), rightX - leftLimit);
     const x = rightX - barW;
     const t = performance.now();
 
@@ -3441,7 +3458,7 @@ function drawBossProgressBar(ctx, rightX, topY) {
     ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#F0F4FF';
-    ctx.fillText(`BOSS · ${remaining} LEFT`, rightX, y + tH + 3);
+    ctx.fillText(barW < 150 ? `${remaining} LEFT` : `BOSS · ${remaining} LEFT`, rightX, y + tH + 3);
     // seconds, colour-coded, on the left of the same line
     ctx.textAlign = 'left';
     ctx.fillStyle = timerCol;
@@ -3463,7 +3480,10 @@ function drawBottomHud(ctx, w, h) {
     ctx.fillStyle = 'rgba(255, 255, 255, 0.07)';
     ctx.fillRect(0, top, w, 1);
 
-    drawPowerupSlots(ctx, 24, top + 17, w);
+    // Touch has its own power-up row above the keyboard; these ⇧F/⇧B/⇧S
+    // slots are keyboard shortcuts.
+    if (!isTouchActive()) drawPowerupSlots(ctx, 24, top + 17, w);
+    else game.powerupRects.length = 0;
     drawComboReadout(ctx, w - 24, top + 22);
 }
 
@@ -3616,6 +3636,10 @@ function drawBossWarningOverlay() {
 
     // BOSS INCOMING text
     ctx.font = "800 64px Sora, Inter, sans-serif";
+    const bannerW = ctx.measureText('BOSS INCOMING').width;
+    if (bannerW > w - 32) {
+        ctx.font = `800 ${Math.floor(64 * (w - 32) / bannerW)}px Sora, Inter, sans-serif`;
+    }
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const pulse = 0.85 + 0.15 * (0.5 + 0.5 * Math.sin(t * 0.012));
