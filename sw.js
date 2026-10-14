@@ -12,13 +12,15 @@
    All paths are RELATIVE so the worker functions both at a domain root
    and under a project path like /wordfall/ on GitHub Pages. */
 
-const CACHE_NAME = 'wordfall-v2'; // bump to purge clients' old caches
+const CACHE_NAME = 'wordfall-v3'; // bump to purge clients' old caches
 
 const PRECACHE_ASSETS = [
   './',
   './index.html',
   './styles.css',
   './game.js',
+  './bg3d.js',
+  './vendor/three-postfx-r128.js',
   './manifest.json',
   './assets/img/bg-skyline.png',
   './assets/img/cannon-typewriter.png',

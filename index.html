@@ -15,6 +15,8 @@
 </head>
 <body>
     <div id="game-container">
+        <!-- 3D city background (bg3d.js). Stays hidden if WebGL/CDN is unavailable. -->
+        <canvas id="bg3d" aria-hidden="true"></canvas>
         <canvas id="game"></canvas>
     </div>
 
@@ -360,6 +362,7 @@
         </div>
     </div>
 
+    <script src="bg3d.js"></script>
     <script src="game.js"></script>
     <script>
         // Register service worker for offline / PWA support.

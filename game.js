@@ -922,6 +922,7 @@ function init() {
     refreshHighUI();
     resize();
     seedStars();
+    Renderer.init3D();
     window.addEventListener('resize', resize);
     document.addEventListener('keydown', onKey);
     // First user interaction unlocks WebAudio AND starts the music loop.
@@ -1023,6 +1024,7 @@ function resize() {
     game.canvas.style.height = game.h + 'px';
     game.ctx.setTransform(game.dpr, 0, 0, game.dpr, 0, 0);
     if (game.touchKeys) computeTouchKeyboardRects();
+    Renderer.resize3D();
 }
 
 function seedStars() {
@@ -2634,6 +2636,8 @@ function drawLoadingScreen() {
 function draw(dt) {
     const ctx = game.ctx;
     const w = game.w, h = game.h;
+    // With the 3D city behind us, this canvas is a transparent overlay.
+    if (Renderer.has3D()) ctx.clearRect(0, 0, w, h);
     ctx.save();
     const effShake = reduceMotion() ? 0 : game.shake;
     if (effShake > 0) {
@@ -2684,6 +2688,9 @@ function draw(dt) {
 }
 
 function drawBackground(ctx, w, h, dt) {
+    // The 3D city layer (bg3d.js) is the background when it's running;
+    // the 2D skyline below is the fallback when WebGL/the CDN isn't.
+    if (Renderer.has3D()) return;
     const act = actConfig(game.act || 1);
     if (Assets.bgSkyline) {
         const img = Assets.bgSkyline;
@@ -4338,10 +4345,39 @@ const Renderer = {
         }
     },
 
+    // 3D background layer (bg3d.js). Optional: everything falls back to the
+    // 2D skyline when WebGL or the CDN is unavailable.
+    has3D() {
+        const bg = window.WordfallBG3D;
+        return !!bg && bg.ready === true;
+    },
+    init3D() {
+        const bg = window.WordfallBG3D;
+        if (bg && typeof bg.init === 'function') bg.init();
+    },
+    resize3D() {
+        const bg = window.WordfallBG3D;
+        if (bg && typeof bg.resize === 'function') bg.resize(game.w, game.h);
+    },
+    // Read-only snapshot of what the 3D layer should show this frame.
+    frame3D(dt, state) {
+        if (!this.has3D()) return;
+        window.WordfallBG3D.frame(dt, {
+            state,
+            hue: actConfig(game.act || 1).hue,
+            freeze: state !== 'versus' && game.freezeTimer > 0,
+        });
+    },
+
     frame(dt) {
-        if (Versus.isActive()) { Versus.draw(game.ctx); return; }
+        if (Versus.isActive()) {
+            this.frame3D(dt, 'versus');
+            Versus.draw(game.ctx);
+            return;
+        }
         if (game.state === 'loading') { drawLoadingScreen(); return; }
         this.tick(dt);
+        this.frame3D(dt, game.state);
         draw(dt);
         if (game.state === 'detonated') drawDetonatedOverlay();
         else if (game.state !== 'actbreak' && game.bossState === 'warning') drawBossWarningOverlay();
@@ -5531,10 +5567,15 @@ const Versus = (() => {
     function draw(ctx) {
         if (!state.active) return;
         const w = game.w, h = game.h;
+        if (Renderer.has3D()) ctx.clearRect(0, 0, w, h);
         ctx.save();
         if (state.shake > 0) ctx.translate((Math.random() - 0.5) * state.shake, (Math.random() - 0.5) * state.shake);
 
-        if (Assets.bgSkyline) {
+        if (Renderer.has3D()) {
+            // 3D city shows through; a light veil keeps both lanes readable.
+            ctx.fillStyle = 'rgba(10, 14, 26, 0.3)';
+            ctx.fillRect(0, 0, w, h);
+        } else if (Assets.bgSkyline) {
             const img = Assets.bgSkyline;
             const ir = img.width / img.height, cr = w / h;
             let dw, dh, dx, dy;
