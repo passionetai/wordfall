@@ -2690,7 +2690,7 @@ function draw(dt) {
 function drawBackground(ctx, w, h, dt) {
     // The 3D city layer (bg3d.js) is the background when it's running;
     // the 2D skyline below is the fallback when WebGL/the CDN isn't.
-    if (Renderer.has3D()) return;
+    if (Renderer.has3D()) { drawReadabilityVeil(ctx, w, h); return; }
     const act = actConfig(game.act || 1);
     if (Assets.bgSkyline) {
         const img = Assets.bgSkyline;
@@ -2737,6 +2737,20 @@ function drawBackground(ctx, w, h, dt) {
         ctx.fillRect(s.x, s.y, s.r, s.r);
     }
     ctx.globalAlpha = 1;
+}
+
+// Over the 3D city, a soft edge vignette keeps the bright near-side
+// buildings from competing with words; the centre stays clear.
+let veilCache = null;
+function drawReadabilityVeil(ctx, w, h) {
+    if (!veilCache || veilCache.w !== w || veilCache.h !== h) {
+        const g = ctx.createRadialGradient(w / 2, h * 0.42, Math.min(w, h) * 0.18, w / 2, h * 0.42, Math.max(w, h) * 0.72);
+        g.addColorStop(0, 'rgba(5, 7, 15, 0)');
+        g.addColorStop(1, 'rgba(5, 7, 15, 0.5)');
+        veilCache = { w, h, g };
+    }
+    ctx.fillStyle = veilCache.g;
+    ctx.fillRect(0, 0, w, h);
 }
 
 function cannonPos() { return { x: game.w / 2, y: game.h - 60 }; }
